@@ -60,5 +60,22 @@ export const WEBCAM = {
 export const STORAGE_KEYS = {
   provider: 'robots.agent.provider',
   apiKey: 'robots.agent.apiKey',
+  /** Provider-specific conversation state (e.g. ClaudeAgent's `messages`). */
   history: 'robots.agent.history',
+  /** UI-rendered transcript (`ChatTurn[]`). */
+  transcript: 'robots.agent.transcript',
+} as const;
+
+/**
+ * Anthropic Haiku 4.5 pricing as of 2026-05. Numbers are USD per million
+ * tokens. Cache reads use the 90% discount tier; cache creation is a 25%
+ * premium over base input.
+ */
+export const PRICING = {
+  haiku45: {
+    inputPerMTok: 0.80,
+    outputPerMTok: 4.00,
+    cacheReadPerMTok: 0.08,
+    cacheCreatePerMTok: 1.00,
+  },
 } as const;

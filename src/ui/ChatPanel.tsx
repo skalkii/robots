@@ -8,6 +8,7 @@ import { ChatTranscript, type ChatTurn } from './ChatTranscript';
 import { ChatComposer } from './ChatComposer';
 import { ChatSettings } from './ChatSettings';
 import type { ToastKind } from './Toast';
+import { formatUsd } from '../agent/pricing';
 
 interface Props {
   control: HumanoidControl;
@@ -25,12 +26,18 @@ export function ChatPanel({ control, onToast }: Props) {
 
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
-  const [turns, setTurns] = useState<ChatTurn[]>([]);
+  const [turns, setTurns] = useState<ChatTurn[]>(() => restoreTranscript());
   const [listening, setListening] = useState(false);
   const [interim, setInterim] = useState('');
   const [cameraOn, setCameraOn] = useState(false);
 
-  const idRef = useRef(0);
+  const idRef = useRef(turns.reduce((max, t) => Math.max(max, t.id), 0));
+
+  // Persist every transcript change so a reload restores the conversation.
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEYS.transcript, JSON.stringify(turns)); }
+    catch { /* quota / private */ }
+  }, [turns]);
   const recognizerRef = useRef<SpeechRecognizer | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const webcamRef = useRef<WebcamCapture | null>(null);
@@ -51,22 +58,39 @@ export function ChatPanel({ control, onToast }: Props) {
     setInput('');
     setInterim('');
     const userLabel = frame ? `${trimmed}  📷` : trimmed;
-    setTurns(prev => [...prev, { id: nextId(), role: 'user', text: userLabel }]);
+    const userId = nextId();
+    const agentId = nextId();
+    setTurns(prev => [
+      ...prev,
+      { id: userId, role: 'user', text: userLabel },
+      { id: agentId, role: 'agent', text: '' },
+    ]);
     setBusy(true);
+
+    // Stream callback: append text deltas to the in-flight agent turn so the
+    // UI renders incrementally instead of staring at "…thinking" for seconds.
+    const onStream = (ev:
+      | { type: 'text'; text: string }
+      | { type: 'tool_start'; name: string }
+      | { type: 'tool_result'; name: string; ok: boolean; message: string }) => {
+      if (ev.type === 'text') {
+        setTurns(prev => prev.map(t => t.id === agentId
+          ? { ...t, text: t.text + ev.text }
+          : t));
+      }
+    };
+
     try {
-      const turn = await agent.respond(trimmed, control, frame);
-      setTurns(prev => [...prev, {
-        id: nextId(),
-        role: 'agent',
-        text: turn.text,
-        tools: turn.tools,
-        usage: turn.usage,
-        truncated: turn.truncated,
-      }]);
+      const turn = await agent.respond(trimmed, control, frame, onStream);
+      setTurns(prev => prev.map(t => t.id === agentId
+        ? { ...t, text: turn.text || t.text, tools: turn.tools, usage: turn.usage, truncated: turn.truncated }
+        : t));
       if (turn.truncated) pushToast('warn', 'Agent reply truncated by tool-round cap.');
     } catch (err) {
       const msg = (err as Error).message;
-      setTurns(prev => [...prev, { id: nextId(), role: 'error', text: msg }]);
+      setTurns(prev => prev.map(t => t.id === agentId
+        ? { ...t, role: 'error', text: msg }
+        : t));
       pushToast('error', msg);
     } finally {
       setBusy(false);
@@ -132,14 +156,23 @@ export function ChatPanel({ control, onToast }: Props) {
   const resetConversation = () => {
     agent.resetConversation?.();
     setTurns([]);
+    try { localStorage.removeItem(STORAGE_KEYS.transcript); } catch { /* quota / private */ }
     pushToast('info', 'Chat history reset.');
   };
+
+  const sessionCost = turns.reduce(
+    (sum, t) => sum + (t.usage?.costUsd ?? 0),
+    0,
+  );
 
   return (
     <section className="chat">
       <header className="chat-header">
         <h2>Agent</h2>
-        <span className="agent-label">{agent.label}</span>
+        <span className="agent-label">
+          {agent.label}
+          {sessionCost > 0 && <span className="agent-cost"> · {formatUsd(sessionCost)}</span>}
+        </span>
         <button
           type="button"
           className="chat-settings"
@@ -186,4 +219,13 @@ export function ChatPanel({ control, onToast }: Props) {
       />
     </section>
   );
+}
+
+function restoreTranscript(): ChatTurn[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.transcript);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed as ChatTurn[] : [];
+  } catch { return []; }
 }
