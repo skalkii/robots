@@ -4,8 +4,16 @@ import { GeomType, type GeomDescriptor, type GeomTypeValue } from './types';
 
 export interface GeomTransform {
   position: [number, number, number];
-  // Row-major 3x3 rotation matrix flattened to 9 entries.
   matrix: [number, number, number, number, number, number, number, number, number];
+}
+
+export interface ActuatorInfo {
+  index: number;
+  name: string;
+  // Effective control range. If the actuator declares no ctrlrange, falls back
+  // to a symmetric default useful for sliders.
+  range: [number, number];
+  hasExplicitRange: boolean;
 }
 
 export class MujocoSim {
@@ -72,6 +80,27 @@ export class MujocoSim {
   get ctrl(): Float64Array { return (this.data as unknown as { ctrl: Float64Array }).ctrl; }
 
   setCtrl(i: number, v: number) { this.ctrl[i] = v; }
+
+  actuators(): ActuatorInfo[] {
+    const ctrlLimited = this.model.actuator_ctrllimited as Uint8Array;
+    const ctrlRange = this.model.actuator_ctrlrange as Float64Array;
+    const out: ActuatorInfo[] = [];
+    for (let i = 0; i < this.nu; i++) {
+      const acc = this.model.actuator(i);
+      const limited = ctrlLimited[i] !== 0;
+      const lo = ctrlRange[i * 2];
+      const hi = ctrlRange[i * 2 + 1];
+      const range: [number, number] = limited && hi > lo ? [lo, hi] : [-1, 1];
+      out.push({ index: i, name: acc.name || `act_${i}`, range, hasExplicitRange: limited });
+      acc.delete();
+    }
+    return out;
+  }
+
+  reset() {
+    this.mujoco.mj_resetData(this.model, this.data);
+    this.mujoco.mj_forward(this.model, this.data);
+  }
 
   dispose() {
     this.data.delete();
