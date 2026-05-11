@@ -1,16 +1,13 @@
 import type { MujocoSim } from '../sim/MujocoSim';
+import { CONTROL } from '../config';
 
 export type Side = 'left' | 'right';
 export type WalkDirection = 'forward' | 'backward' | 'left' | 'right';
 
 interface LocomotionState {
-  /** Current world-frame xy of the torso. */
   pos: [number, number];
-  /** Current yaw about world Z (radians). */
   yaw: number;
-  /** Pending walk command, if any. */
   walk: { dir: WalkDirection; remaining: number; speed: number } | null;
-  /** Pending turn command, if any. signedRate in rad/s. */
   turn: { remaining: number; signedRate: number } | null;
 }
 
@@ -27,28 +24,20 @@ interface PDTarget {
   qposAdr: number;
   dofAdr: number;
   actuatorIdx: number;
+  /** Inverse of the actuator's gear so we can divide once per tick. */
+  invGear: number;
   target: number;
+  /** Proportional gain in N·m / rad (already in physical units, gear-aware). */
   kp: number;
+  /** Derivative gain in N·m·s / rad. */
   kd: number;
 }
 
-/**
- * High-level kinematic control for the canonical DeepMind humanoid model.
- *
- * Every joint in humanoid.xml is driven by a torque-mode <motor>, so this
- * class layers a per-joint PD controller on top. Each physics step reads the
- * current joint angle/velocity, computes u = kp*(target - q) - kd*v, clamps
- * to the actuator's ctrl range, and writes data.ctrl[i]. Targets persist
- * until release(joint) or releaseAll() is called.
- */
 export interface StandOptions {
-  /** If true, freezes the torso root in its default position/orientation each
-   *  step (kinematic cheat — robot won't fall but also won't interact with
-   *  external forces on its base). Default: false. */
   pinRoot?: boolean;
-  /** Proportional gain for the joint-angle PD. */
+  /** Override the base proportional gain (Nm/rad). Per-joint gear is applied
+   *  on top so heavier joints still get their share of effort. */
   kp?: number;
-  /** Derivative gain. */
   kd?: number;
 }
 
@@ -67,78 +56,59 @@ export class HumanoidControl {
   dispose() {
     this.unregister?.();
     this.unregister = null;
-    this.releaseAll();
+    this.goLimp();
   }
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Per-limb commands
+  // ──────────────────────────────────────────────────────────────────────
 
   raiseArm(side: Side, angleDeg: number) {
     const a = degToRad(angleDeg);
-    this.setTarget(`shoulder1_${side}`, `shoulder1_${side}`, a, 8, 0.6);
-    this.setTarget(`shoulder2_${side}`, `shoulder2_${side}`, a, 8, 0.6);
+    this.setTarget(`shoulder1_${side}`, `shoulder1_${side}`, a, CONTROL.pd.armKp, CONTROL.pd.armKd);
+    this.setTarget(`shoulder2_${side}`, `shoulder2_${side}`, a, CONTROL.pd.armKp, CONTROL.pd.armKd);
   }
 
-  lowerArm(side: Side) {
-    this.raiseArm(side, 0);
-  }
+  lowerArm(side: Side) { this.raiseArm(side, 0); }
 
   bendElbow(side: Side, angleDeg: number) {
-    this.setTarget(`elbow_${side}`, `elbow_${side}`, degToRad(angleDeg), 6, 0.4);
+    this.setTarget(`elbow_${side}`, `elbow_${side}`, degToRad(angleDeg), CONTROL.pd.elbowKp, CONTROL.pd.elbowKd);
   }
 
   /**
-   * Drive every actuated joint toward its default angle so the humanoid holds
-   * its initial standing pose.
+   * Drive every actuated joint toward its default angle. Existing per-limb
+   * targets are cleared first so a stale `raiseArm` doesn't fight stand.
    *
-   * In humanoid.xml each actuator name equals its driven joint name, and the
-   * model's default qpos for those hinges is 0, so the PD target is 0 across
-   * the board. Gains are stiffer than the per-limb commands above.
-   *
-   * The model is statically unstable: even with all joints pinned to neutral
-   * the floating-base humanoid will eventually topple under integration
-   * noise. For a reliable "just stand there" demo, pass `{ pinRoot: true }`
-   * to also clamp the torso's free joint in place each step (kinematic
-   * cheat per the project docs).
+   * For real-world standing, also enable `pinRoot` to kinematically clamp
+   * the torso (the floating-base humanoid is statically unstable and will
+   * eventually topple under integration noise even with perfect PD).
    */
   stand(opts: StandOptions = {}) {
-    const kp = opts.kp ?? 14;
-    const kd = opts.kd ?? 0.9;
+    const kp = opts.kp ?? CONTROL.pd.standKp;
+    const kd = opts.kd ?? CONTROL.pd.standKd;
+    this.clearTargets();
     for (const a of this.sim.actuators()) {
       this.setTarget(a.name, a.name, 0, kp, kd);
     }
     this.pinRoot = !!opts.pinRoot;
   }
 
-  /** Turn off the root pin set by `stand({ pinRoot: true })`. PD targets stay
-   *  active — call `releaseAll()` to also clear those. */
-  unpinRoot() {
-    this.pinRoot = false;
-  }
+  // ──────────────────────────────────────────────────────────────────────
+  // Locomotion (kinematic root translation/rotation)
+  // ──────────────────────────────────────────────────────────────────────
 
-  /**
-   * Kinematic walk along a robot-relative direction for `distanceMeters`.
-   *
-   * The free root joint is written every step rather than integrated by
-   * physics — this is the explicit "cheat" called out in the project
-   * context doc. Limb PD targets continue to act so the humanoid keeps
-   * a coherent standing pose while it glides; gait synthesis is not yet
-   * implemented. Calling `stand()` first is recommended.
-   *
-   * Speed defaults to 1.0 m/s. Setting `pinRoot` is incompatible with
-   * locomotion (locomotion writes the root every step anyway), so
-   * activating walk implicitly disables the pin.
-   */
-  walk(direction: WalkDirection, distanceMeters: number, speed = 1.0) {
-    if (distanceMeters <= 0 || speed <= 0) return;
+  walk(direction: WalkDirection, distanceMeters: number, speed: number = CONTROL.walk.defaultSpeedMps) {
+    if (distanceMeters < CONTROL.walk.minDistanceM || speed <= 0) return;
+    // Without limb PD, the body glides while limbs ragdoll — implicitly stand
+    // so the visual stays coherent.
+    if (this.targets.size === 0) this.stand();
     const loco = this.ensureLocomotion();
     loco.walk = { dir: direction, remaining: distanceMeters, speed };
   }
 
-  /**
-   * Kinematic in-place yaw rotation. Positive degrees = counter-clockwise
-   * when viewed from above (+Z up), i.e. "turn left". Default angular
-   * rate is 90°/s.
-   */
-  turn(degrees: number, rateDegPerSec = 90) {
+  turn(degrees: number, rateDegPerSec: number = CONTROL.turn.defaultRateDegPerSec) {
     if (degrees === 0 || rateDegPerSec <= 0) return;
+    if (this.targets.size === 0) this.stand();
     const loco = this.ensureLocomotion();
     const rad = degToRad(degrees);
     loco.turn = {
@@ -147,11 +117,20 @@ export class HumanoidControl {
     };
   }
 
-  /** Cancel any in-progress walk/turn. Limb PD targets stay engaged. */
-  stop() {
-    this.locomotion = null;
+  /** Cancel any in-progress walk/turn. PD targets and root pin stay. */
+  cancelMotion() { this.locomotion = null; }
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Atomic state operations
+  // ──────────────────────────────────────────────────────────────────────
+
+  /** Clear PD targets only. Locomotion and root pin keep running. */
+  clearTargets() {
+    for (const t of this.targets.values()) this.sim.setCtrl(t.actuatorIdx, 0);
+    this.targets.clear();
   }
 
+  /** Release a single joint's PD target. */
   release(joint: string) {
     if (this.targets.delete(joint)) {
       const idx = this.sim.findActuator(joint);
@@ -159,12 +138,19 @@ export class HumanoidControl {
     }
   }
 
-  releaseAll() {
-    for (const t of this.targets.values()) this.sim.setCtrl(t.actuatorIdx, 0);
-    this.targets.clear();
+  unpinRoot() { this.pinRoot = false; }
+
+  /** Drop everything: PD targets, root pin, locomotion. The robot goes limp. */
+  goLimp() {
+    this.clearTargets();
     this.pinRoot = false;
     this.locomotion = null;
   }
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Unsupported on the stock model — kept on the surface so callers (and
+  // LLM agents) get a typed failure rather than a missing method.
+  // ──────────────────────────────────────────────────────────────────────
 
   turnHead(_yawDeg: number, _pitchDeg: number): never {
     throw new UnsupportedControlError(
@@ -180,6 +166,10 @@ export class HumanoidControl {
     );
   }
 
+  // ──────────────────────────────────────────────────────────────────────
+  // Internals
+  // ──────────────────────────────────────────────────────────────────────
+
   private setTarget(jointName: string, actuatorName: string, target: number, kp: number, kd: number) {
     const j = this.sim.findJoint(jointName);
     const a = this.sim.findActuator(actuatorName);
@@ -189,12 +179,14 @@ export class HumanoidControl {
         `joint "${jointName}" or actuator "${actuatorName}" not found in model`,
       );
     }
+    const gear = this.sim.gear[a] || 1;
     this.targets.set(jointName, {
       jointName,
       actuatorName,
       qposAdr: j.qposAdr,
       dofAdr: j.dofAdr,
       actuatorIdx: a,
+      invGear: 1 / gear,
       target,
       kp,
       kd,
@@ -210,7 +202,9 @@ export class HumanoidControl {
     for (const t of this.targets.values()) {
       const q = qpos[t.qposAdr];
       const v = qvel[t.dofAdr];
-      const u = clamp(t.kp * (t.target - q) - t.kd * v, -1, 1);
+      // PD output in physical torque units; convert to normalized ctrl via
+      // 1/gear so heavier-geared joints don't blow past their ctrl limits.
+      const u = clamp((t.kp * (t.target - q) - t.kd * v) * t.invGear, -1, 1);
       this.sim.setCtrl(t.actuatorIdx, u);
     }
   }
@@ -221,7 +215,6 @@ export class HumanoidControl {
     const qpos = this.sim.qpos;
     const qvel = this.sim.qvel;
     const init = this.sim.initialQpos;
-    // Free joint: 7 qpos slots (3 pos + 4 quat) and 6 qvel slots (3 lin + 3 ang).
     for (let i = 0; i < 7; i++) qpos[root.qposAdr + i] = init[root.qposAdr + i];
     for (let i = 0; i < 6; i++) qvel[root.dofAdr + i] = 0;
   }
@@ -234,7 +227,6 @@ export class HumanoidControl {
         'the current model has no free root joint, so kinematic locomotion is not available',
       );
     }
-    // Locomotion takes over root writes; root pin would clobber its updates.
     this.pinRoot = false;
     if (this.locomotion) return this.locomotion;
 
@@ -245,8 +237,7 @@ export class HumanoidControl {
     const qx = init[root.qposAdr + 4];
     const qy = init[root.qposAdr + 5];
     const qz = init[root.qposAdr + 6];
-    const yaw0 = quatToYaw(qw, qx, qy, qz);
-    this.locomotion = { pos: [x0, y0], yaw: yaw0, walk: null, turn: null };
+    this.locomotion = { pos: [x0, y0], yaw: quatToYaw(qw, qx, qy, qz), walk: null, turn: null };
     return this.locomotion;
   }
 
@@ -274,7 +265,6 @@ export class HumanoidControl {
       if (loco.walk.remaining <= 1e-6) loco.walk = null;
     }
 
-    // Write root qpos every step so physics can't drift it.
     const qpos = this.sim.qpos;
     const qvel = this.sim.qvel;
     const init = this.sim.initialQpos;
@@ -287,20 +277,14 @@ export class HumanoidControl {
     qpos[root.qposAdr + 5] = 0;
     qpos[root.qposAdr + 6] = Math.sin(half);
     for (let i = 0; i < 6; i++) qvel[root.dofAdr + i] = 0;
-
-    if (!loco.walk && !loco.turn) {
-      // Stay in place at the final commanded pose until the user issues
-      // another locomotion command or releaseAll().
-    }
   }
 }
 
-function quatToYaw(w: number, x: number, y: number, z: number): number {
+export function quatToYaw(w: number, x: number, y: number, z: number): number {
   return Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
 }
 
-function worldDirFromLocal(dir: WalkDirection, yaw: number): [number, number] {
-  // Robot local axes: +X forward, +Y left (right-handed, Z up).
+export function worldDirFromLocal(dir: WalkDirection, yaw: number): [number, number] {
   const cy = Math.cos(yaw);
   const sy = Math.sin(yaw);
   switch (dir) {
@@ -311,5 +295,5 @@ function worldDirFromLocal(dir: WalkDirection, yaw: number): [number, number] {
   }
 }
 
-function degToRad(d: number) { return (d * Math.PI) / 180; }
+export function degToRad(d: number) { return (d * Math.PI) / 180; }
 function clamp(x: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, x)); }
