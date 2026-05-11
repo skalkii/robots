@@ -7,9 +7,18 @@ interface Props {
   control: HumanoidControl | null;
   paused: boolean;
   onTogglePaused: () => void;
+  followEnabled: boolean;
+  onToggleFollow: () => void;
 }
 
-export function ControlsPanel({ sim, control, paused, onTogglePaused }: Props) {
+export function ControlsPanel({
+  sim,
+  control,
+  paused,
+  onTogglePaused,
+  followEnabled,
+  onToggleFollow,
+}: Props) {
   const [actuators] = useState<ActuatorInfo[]>(() => sim.actuators());
   const [values, setValues] = useState<number[]>(() => Array.from({ length: actuators.length }, () => 0));
 
@@ -55,6 +64,11 @@ export function ControlsPanel({ sim, control, paused, onTogglePaused }: Props) {
           <button onClick={onTogglePaused}>{paused ? 'Resume' : 'Pause'}</button>
           <button onClick={handleZeroCtrl}>Zero ctrl</button>
           <button onClick={handleReset}>Reset sim</button>
+        </div>
+        <div className="buttons">
+          <button onClick={onToggleFollow}>
+            Follow: {followEnabled ? 'on' : 'off'}
+          </button>
         </div>
         {control && (
           <div className="commands">

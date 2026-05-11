@@ -16,6 +16,15 @@ export class Scene {
   private root = new THREE.Group();
   paused = false;
 
+  /** When non-null, the camera smoothly tracks whatever world-frame XYZ this
+   *  closure returns. The point is given in MuJoCo's Z-up frame; the renderer
+   *  converts it to Three's Y-up before applying. */
+  private followGetter: (() => [number, number, number] | null) | null = null;
+  followEnabled = true;
+  private followLerp = 0.12;
+  private followTmp = new THREE.Vector3();
+  private followDelta = new THREE.Vector3();
+
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(window.devicePixelRatio);
@@ -60,17 +69,40 @@ export class Scene {
     this.syncFromSim();
   }
 
+  setFollowGetter(fn: (() => [number, number, number] | null) | null) {
+    this.followGetter = fn;
+  }
+
+  toggleFollow(enabled?: boolean) {
+    this.followEnabled = enabled ?? !this.followEnabled;
+  }
+
   start() {
     const tick = () => {
       if (this.sim && !this.paused) {
         for (let i = 0; i < 4; i++) this.sim.step();
       }
       if (this.sim) this.syncFromSim();
+      this.updateFollow();
       this.controls.update();
       this.renderer.render(this.scene, this.camera);
       this.raf = requestAnimationFrame(tick);
     };
     this.raf = requestAnimationFrame(tick);
+  }
+
+  private updateFollow() {
+    if (!this.followEnabled || !this.followGetter) return;
+    const mj = this.followGetter();
+    if (!mj) return;
+    // MuJoCo (x, y, z) → Three world (x, z, -y) via the Z-up→Y-up rotation
+    // baked into the scene root. We apply it directly here so the camera —
+    // which lives outside the rotated group — stays in world coordinates.
+    this.followTmp.set(mj[0], mj[2], -mj[1]);
+    this.followDelta.copy(this.followTmp).sub(this.controls.target);
+    this.followDelta.multiplyScalar(this.followLerp);
+    this.controls.target.add(this.followDelta);
+    this.camera.position.add(this.followDelta);
   }
 
   stop() {

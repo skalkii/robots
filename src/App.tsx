@@ -13,6 +13,7 @@ export default function App() {
   const [scene, setScene] = useState<Scene | null>(null);
   const [control, setControl] = useState<HumanoidControl | null>(null);
   const [paused, setPaused] = useState(false);
+  const [followEnabled, setFollowEnabled] = useState(true);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -36,6 +37,8 @@ export default function App() {
         setStatus('rendering');
         localScene = new Scene(canvas);
         localScene.attachSim(localSim);
+        const followSim = localSim;
+        localScene.setFollowGetter(() => followSim.rootPos());
         localScene.start();
 
         localControl = new HumanoidControl(localSim);
@@ -66,6 +69,12 @@ export default function App() {
     setPaused(scene.paused);
   };
 
+  const toggleFollow = () => {
+    if (!scene) return;
+    scene.toggleFollow();
+    setFollowEnabled(scene.followEnabled);
+  };
+
   return (
     <div className="app">
       <canvas ref={canvasRef} className="viewport" />
@@ -84,6 +93,8 @@ export default function App() {
           control={control}
           paused={paused}
           onTogglePaused={togglePaused}
+          followEnabled={followEnabled}
+          onToggleFollow={toggleFollow}
         />
       )}
       {control && <ChatPanel control={control} />}

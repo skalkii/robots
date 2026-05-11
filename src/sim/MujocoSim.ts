@@ -166,6 +166,15 @@ export class MujocoSim {
     return v === undefined ? null : v;
   }
 
+  /** Returns the free-root body's world position [x, y, z] in MuJoCo's frame.
+   *  null when the model has no free root joint. */
+  rootPos(): [number, number, number] | null {
+    const r = this.rootFreeJoint;
+    if (!r) return null;
+    const q = this.qpos;
+    return [q[r.qposAdr], q[r.qposAdr + 1], q[r.qposAdr + 2]];
+  }
+
   actuators(): ActuatorInfo[] {
     const ctrlLimited = this.model.actuator_ctrllimited as Uint8Array;
     const ctrlRange = this.model.actuator_ctrlrange as Float64Array;
