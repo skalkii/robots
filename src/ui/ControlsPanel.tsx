@@ -66,6 +66,12 @@ export function ControlsPanel({ sim, control, paused, onTogglePaused }: Props) {
               <button onClick={armDown.right}>Lower R</button>
               <button onClick={elbow90.left}>Bend L elbow</button>
               <button onClick={elbow90.right}>Bend R elbow</button>
+              <button className="span2" onClick={() => runCommand(() => control.stand())}>
+                Stand (PD only)
+              </button>
+              <button className="span2" onClick={() => runCommand(() => control.stand({ pinRoot: true }))}>
+                Stand (pinned root)
+              </button>
               <button className="span2" onClick={() => runCommand(() => control.releaseAll())}>
                 Release all targets
               </button>
