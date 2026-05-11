@@ -218,6 +218,46 @@ export class MujocoSim {
     return [this.actuatorRange[i * 2], this.actuatorRange[i * 2 + 1]];
   }
 
+  /**
+   * Cast a ray straight down from `fromZ` at world (x, y) and return the
+   * Z coordinate of the first geom it hits. Returns `null` when the ray
+   * misses everything — useful for the locomotion ground-height hook.
+   *
+   * Uses MuJoCo's `mj_ray` against all six visibility groups, including
+   * static geoms (the floor plane). The returned hit point's z is
+   * `fromZ - distance` since the ray direction is `(0, 0, -1)`.
+   */
+  rayDown(x: number, y: number, fromZ = 100): number | null {
+    if (this.disposed || !this.mujoco || !this.rawModel || !this.rawData) return null;
+    const m = this.mujoco as unknown as {
+      mj_ray(
+        model: MjModel, data: MjData,
+        pnt: number[], vec: number[],
+        geomgroup: number[], flg_static: number, bodyexclude: number,
+        geomidOut: object, distOut: object,
+      ): number;
+      IntBuffer: { FromArray(a: number[]): { delete(): void } };
+      DoubleBuffer: { FromArray(a: number[]): { delete(): void } };
+    };
+    const id = m.IntBuffer.FromArray([-1]);
+    const dist = m.DoubleBuffer.FromArray([0]);
+    try {
+      const d = m.mj_ray(
+        this.rawModel, this.rawData,
+        [x, y, fromZ], [0, 0, -1],
+        [1, 1, 1, 1, 1, 1], 1, -1,
+        id, dist,
+      );
+      if (d < 0) return null;
+      return fromZ - d;
+    } catch {
+      return null;
+    } finally {
+      id.delete();
+      dist.delete();
+    }
+  }
+
   setCtrl(i: number, v: number) {
     if (this.disposed || !this.data) return;
     if (i < 0 || i >= this.nu) return;
