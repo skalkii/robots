@@ -208,7 +208,7 @@
   margin-left: auto;
 }
 
-.chat-settings {
+.chat-settings, .chat-camera {
   background: transparent;
   color: #d8dee9;
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -217,9 +217,37 @@
   cursor: pointer;
   font-size: 14px;
   line-height: 1;
+  position: relative;
 }
 
-.chat-settings:hover { background: rgba(255, 255, 255, 0.06); }
+.chat-settings:hover, .chat-camera:not(:disabled):hover { background: rgba(255, 255, 255, 0.06); }
+.chat-camera:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.chat-camera .dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 4px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.2);
+  vertical-align: middle;
+}
+
+.chat-camera.on .dot {
+  background: #bf616a;
+  box-shadow: 0 0 6px #bf616a;
+}
+
+.webcam-preview {
+  display: none;
+  width: 100%;
+  max-height: 130px;
+  object-fit: cover;
+  background: #000;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.webcam-preview.on { display: block; }
 
 .chat-settings-pane {
   display: flex;

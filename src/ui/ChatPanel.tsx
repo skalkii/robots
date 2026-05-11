@@ -4,6 +4,7 @@ import type { AgentClient, AgentTurn } from '../agent/AgentClient';
 import { MockAgent } from '../agent/MockAgent';
 import { ClaudeAgent } from '../agent/ClaudeAgent';
 import { SpeechRecognizer } from '../agent/SpeechRecognizer';
+import { WebcamCapture } from '../agent/WebcamCapture';
 
 type Provider = 'mock' | 'claude';
 
@@ -31,12 +32,17 @@ export function ChatPanel({ control }: Props) {
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [listening, setListening] = useState(false);
   const [interim, setInterim] = useState('');
+  const [cameraOn, setCameraOn] = useState(false);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const idRef = useRef(0);
   const recognizerRef = useRef<SpeechRecognizer | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const webcamRef = useRef<WebcamCapture | null>(null);
   const speechSupported =
     recognizerRef.current?.supported ??
     (typeof window !== 'undefined' && !!(window.SpeechRecognition ?? window.webkitSpeechRecognition));
+  const cameraSupported =
+    typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia;
 
   const agent: AgentClient = useMemo(() => {
     if (provider === 'claude' && apiKey) return new ClaudeAgent(apiKey);
@@ -52,12 +58,14 @@ export function ChatPanel({ control }: Props) {
   const submit = useCallback(async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed || busy) return;
+    const frame = webcamRef.current?.active ? webcamRef.current.captureFrame() : null;
     setInput('');
     setInterim('');
-    setTurns(prev => [...prev, { id: nextId(), role: 'user', text: trimmed }]);
+    const userLabel = frame ? `${trimmed}  📷` : trimmed;
+    setTurns(prev => [...prev, { id: nextId(), role: 'user', text: userLabel }]);
     setBusy(true);
     try {
-      const turn = await agent.respond(trimmed, control);
+      const turn = await agent.respond(trimmed, control, frame);
       setTurns(prev => [...prev, { id: nextId(), role: 'agent', text: turn.text, tools: turn.tools }]);
     } catch (err) {
       setTurns(prev => [
@@ -110,6 +118,27 @@ export function ChatPanel({ control }: Props) {
   };
 
   useEffect(() => () => recognizerRef.current?.abort(), []);
+  useEffect(() => () => webcamRef.current?.stop(), []);
+
+  const toggleCamera = async () => {
+    if (!cameraSupported || !videoRef.current) return;
+    if (!webcamRef.current) {
+      webcamRef.current = new WebcamCapture({
+        videoEl: videoRef.current,
+        onError: msg => {
+          setCameraOn(false);
+          setTurns(prev => [...prev, { id: nextId(), role: 'error', text: `camera: ${msg}` }]);
+        },
+      });
+    }
+    if (webcamRef.current.active) {
+      webcamRef.current.stop();
+      setCameraOn(false);
+    } else {
+      const ok = await webcamRef.current.start();
+      setCameraOn(ok);
+    }
+  };
 
   const saveSettings = () => {
     localStorage.setItem(STORE_PROVIDER, provider);
@@ -123,10 +152,28 @@ export function ChatPanel({ control }: Props) {
       <header className="chat-header">
         <h2>Agent</h2>
         <span className="agent-label">{agent.label}</span>
+        <button
+          type="button"
+          className={`chat-camera ${cameraOn ? 'on' : ''}`}
+          onClick={toggleCamera}
+          disabled={!cameraSupported || busy}
+          title={cameraSupported ? (cameraOn ? 'Disable webcam' : 'Enable webcam — attaches one frame per message') : 'Webcam not supported'}
+          aria-label="Toggle webcam"
+        >
+          {cameraOn ? '📷' : '📷'}<span className="dot" />
+        </button>
         <button className="chat-settings" onClick={() => setSettingsOpen(o => !o)} aria-label="Settings">
           ⚙
         </button>
       </header>
+
+      <video
+        ref={videoRef}
+        className={`webcam-preview ${cameraOn ? 'on' : ''}`}
+        playsInline
+        muted
+      />
+
 
       {settingsOpen && (
         <div className="chat-settings-pane">
