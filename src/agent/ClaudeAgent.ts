@@ -229,7 +229,7 @@ function sleep(ms: number) { return new Promise<void>(r => setTimeout(r, ms)); }
  *   message_delta            → captures stop_reason + final output_tokens
  *   message_stop             → end of stream
  */
-async function parseSseStream(
+export async function parseSseStream(
   body: ReadableStream<Uint8Array>,
   onStream?: StreamCallback,
 ): Promise<ApiResponse> {
