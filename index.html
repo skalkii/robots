@@ -7,14 +7,23 @@
     <!--
       Content-Security-Policy
       ────────────────────────────────────────────────────────────────────
-      script-src: self + 'wasm-unsafe-eval' for MuJoCo's emscripten module.
-      connect-src: self (Vite HMR) + Anthropic API host.
-      worker-src: blob: so the wasm runtime can spawn its initializer.
-      img-src: self + data: + blob: so the webcam preview and captured
-               JPEG frames work.
-      media-src: blob: for the live webcam stream.
-      object-src 'none' / base-uri 'self' / frame-ancestors 'none' — hardens
-      the page against tag injection.
+      script-src: self + 'wasm-unsafe-eval' + 'unsafe-eval'.
+
+      The 'unsafe-eval' is required by `@mujoco/mujoco`. Embind generates
+      its C++/JS bridge invokers at runtime via `new Function(...)` (see
+      mujoco.js:5212, 6188), which CSP treats as `unsafe-eval`. The
+      `wasm-unsafe-eval` keyword covers only WASM compilation, not JS-side
+      `new Function`. Vite's dev HMR client also relies on `new Function`,
+      so dev mode would refuse to update modules without it.
+
+      This is the documented cost of running an emscripten-generated
+      module in the browser; there is no user-level workaround without
+      switching to a custom mujoco build with `-s DYNAMIC_EXECUTION=0`.
+
+      The rest of the policy still narrows the attack surface:
+      - connect-src restricted to self + Anthropic + ws/wss.
+      - img-src/media-src/worker-src permit `blob:` for the webcam path.
+      - object-src 'none', base-uri 'self', frame-ancestors 'none'.
 
       `unsafe-inline` for style-src covers Three.js / React Hot Reload
       inline style attributes. Tightening this further would require
@@ -24,7 +33,7 @@
       http-equiv="Content-Security-Policy"
       content="
         default-src 'self';
-        script-src 'self' 'wasm-unsafe-eval';
+        script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval';
         style-src 'self' 'unsafe-inline';
         img-src 'self' data: blob:;
         media-src 'self' blob:;
