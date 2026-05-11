@@ -3,6 +3,7 @@ import { MujocoSim } from './sim/MujocoSim';
 import { Scene } from './render/Scene';
 import { HumanoidControl } from './control/HumanoidControl';
 import { ControlsPanel } from './ui/ControlsPanel';
+import { ChatPanel } from './ui/ChatPanel';
 import './App.css';
 
 export default function App() {
@@ -85,6 +86,7 @@ export default function App() {
           onTogglePaused={togglePaused}
         />
       )}
+      {control && <ChatPanel control={control} />}
     </div>
   );
 }
