@@ -155,6 +155,8 @@ export class MujocoSim {
 
   get nu(): number { return (this.model as unknown as { nu: number }).nu; }
   get ctrl(): Float64Array { return (this.data as unknown as { ctrl: Float64Array }).ctrl; }
+  /** Physics integration timestep in seconds (from `model.opt.timestep`). */
+  get dt(): number { return this.model.opt.timestep; }
 
   setCtrl(i: number, v: number) { this.ctrl[i] = v; }
 

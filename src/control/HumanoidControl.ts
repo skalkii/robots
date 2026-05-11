@@ -1,6 +1,18 @@
 import type { MujocoSim } from '../sim/MujocoSim';
 
 export type Side = 'left' | 'right';
+export type WalkDirection = 'forward' | 'backward' | 'left' | 'right';
+
+interface LocomotionState {
+  /** Current world-frame xy of the torso. */
+  pos: [number, number];
+  /** Current yaw about world Z (radians). */
+  yaw: number;
+  /** Pending walk command, if any. */
+  walk: { dir: WalkDirection; remaining: number; speed: number } | null;
+  /** Pending turn command, if any. signedRate in rad/s. */
+  turn: { remaining: number; signedRate: number } | null;
+}
 
 export class UnsupportedControlError extends Error {
   constructor(method: string, reason: string) {
@@ -45,6 +57,7 @@ export class HumanoidControl {
   private targets = new Map<string, PDTarget>();
   private unregister: (() => void) | null = null;
   private pinRoot = false;
+  private locomotion: LocomotionState | null = null;
 
   constructor(sim: MujocoSim) {
     this.sim = sim;
@@ -100,6 +113,45 @@ export class HumanoidControl {
     this.pinRoot = false;
   }
 
+  /**
+   * Kinematic walk along a robot-relative direction for `distanceMeters`.
+   *
+   * The free root joint is written every step rather than integrated by
+   * physics — this is the explicit "cheat" called out in the project
+   * context doc. Limb PD targets continue to act so the humanoid keeps
+   * a coherent standing pose while it glides; gait synthesis is not yet
+   * implemented. Calling `stand()` first is recommended.
+   *
+   * Speed defaults to 1.0 m/s. Setting `pinRoot` is incompatible with
+   * locomotion (locomotion writes the root every step anyway), so
+   * activating walk implicitly disables the pin.
+   */
+  walk(direction: WalkDirection, distanceMeters: number, speed = 1.0) {
+    if (distanceMeters <= 0 || speed <= 0) return;
+    const loco = this.ensureLocomotion();
+    loco.walk = { dir: direction, remaining: distanceMeters, speed };
+  }
+
+  /**
+   * Kinematic in-place yaw rotation. Positive degrees = counter-clockwise
+   * when viewed from above (+Z up), i.e. "turn left". Default angular
+   * rate is 90°/s.
+   */
+  turn(degrees: number, rateDegPerSec = 90) {
+    if (degrees === 0 || rateDegPerSec <= 0) return;
+    const loco = this.ensureLocomotion();
+    const rad = degToRad(degrees);
+    loco.turn = {
+      remaining: Math.abs(rad),
+      signedRate: Math.sign(rad) * degToRad(rateDegPerSec),
+    };
+  }
+
+  /** Cancel any in-progress walk/turn. Limb PD targets stay engaged. */
+  stop() {
+    this.locomotion = null;
+  }
+
   release(joint: string) {
     if (this.targets.delete(joint)) {
       const idx = this.sim.findActuator(joint);
@@ -111,6 +163,7 @@ export class HumanoidControl {
     for (const t of this.targets.values()) this.sim.setCtrl(t.actuatorIdx, 0);
     this.targets.clear();
     this.pinRoot = false;
+    this.locomotion = null;
   }
 
   turnHead(_yawDeg: number, _pitchDeg: number): never {
@@ -149,7 +202,8 @@ export class HumanoidControl {
   }
 
   private tick() {
-    if (this.pinRoot) this.applyRootPin();
+    if (this.locomotion) this.advanceLocomotion();
+    else if (this.pinRoot) this.applyRootPin();
     if (this.targets.size === 0) return;
     const qpos = this.sim.qpos;
     const qvel = this.sim.qvel;
@@ -170,6 +224,90 @@ export class HumanoidControl {
     // Free joint: 7 qpos slots (3 pos + 4 quat) and 6 qvel slots (3 lin + 3 ang).
     for (let i = 0; i < 7; i++) qpos[root.qposAdr + i] = init[root.qposAdr + i];
     for (let i = 0; i < 6; i++) qvel[root.dofAdr + i] = 0;
+  }
+
+  private ensureLocomotion(): LocomotionState {
+    const root = this.sim.rootFreeJoint;
+    if (!root) {
+      throw new UnsupportedControlError(
+        'locomotion',
+        'the current model has no free root joint, so kinematic locomotion is not available',
+      );
+    }
+    // Locomotion takes over root writes; root pin would clobber its updates.
+    this.pinRoot = false;
+    if (this.locomotion) return this.locomotion;
+
+    const init = this.sim.initialQpos;
+    const x0 = init[root.qposAdr + 0];
+    const y0 = init[root.qposAdr + 1];
+    const qw = init[root.qposAdr + 3];
+    const qx = init[root.qposAdr + 4];
+    const qy = init[root.qposAdr + 5];
+    const qz = init[root.qposAdr + 6];
+    const yaw0 = quatToYaw(qw, qx, qy, qz);
+    this.locomotion = { pos: [x0, y0], yaw: yaw0, walk: null, turn: null };
+    return this.locomotion;
+  }
+
+  private advanceLocomotion() {
+    const root = this.sim.rootFreeJoint;
+    const loco = this.locomotion;
+    if (!root || !loco) return;
+    const dt = this.sim.dt;
+
+    if (loco.turn) {
+      const want = loco.turn.signedRate * dt;
+      const cap = Math.min(Math.abs(want), loco.turn.remaining) * Math.sign(want);
+      loco.yaw += cap;
+      loco.turn.remaining -= Math.abs(cap);
+      if (loco.turn.remaining <= 1e-6) loco.turn = null;
+    }
+
+    if (loco.walk) {
+      const want = loco.walk.speed * dt;
+      const cap = Math.min(want, loco.walk.remaining);
+      const [dx, dy] = worldDirFromLocal(loco.walk.dir, loco.yaw);
+      loco.pos[0] += dx * cap;
+      loco.pos[1] += dy * cap;
+      loco.walk.remaining -= cap;
+      if (loco.walk.remaining <= 1e-6) loco.walk = null;
+    }
+
+    // Write root qpos every step so physics can't drift it.
+    const qpos = this.sim.qpos;
+    const qvel = this.sim.qvel;
+    const init = this.sim.initialQpos;
+    qpos[root.qposAdr + 0] = loco.pos[0];
+    qpos[root.qposAdr + 1] = loco.pos[1];
+    qpos[root.qposAdr + 2] = init[root.qposAdr + 2];
+    const half = loco.yaw / 2;
+    qpos[root.qposAdr + 3] = Math.cos(half);
+    qpos[root.qposAdr + 4] = 0;
+    qpos[root.qposAdr + 5] = 0;
+    qpos[root.qposAdr + 6] = Math.sin(half);
+    for (let i = 0; i < 6; i++) qvel[root.dofAdr + i] = 0;
+
+    if (!loco.walk && !loco.turn) {
+      // Stay in place at the final commanded pose until the user issues
+      // another locomotion command or releaseAll().
+    }
+  }
+}
+
+function quatToYaw(w: number, x: number, y: number, z: number): number {
+  return Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
+}
+
+function worldDirFromLocal(dir: WalkDirection, yaw: number): [number, number] {
+  // Robot local axes: +X forward, +Y left (right-handed, Z up).
+  const cy = Math.cos(yaw);
+  const sy = Math.sin(yaw);
+  switch (dir) {
+    case 'forward':  return [cy, sy];
+    case 'backward': return [-cy, -sy];
+    case 'left':     return [-sy, cy];
+    case 'right':    return [sy, -cy];
   }
 }
 
