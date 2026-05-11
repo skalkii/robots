@@ -1,5 +1,11 @@
 import type { MujocoSim } from '../sim/MujocoSim';
 import { CONTROL } from '../config';
+import {
+  DEFAULT_HUMANOID_PROFILE,
+  type HumanoidProfile,
+} from './humanoidProfiles';
+export type { HumanoidProfile };
+export { DEFAULT_HUMANOID_PROFILE, DEEPMIND_HUMANOID_PROFILE, UNITREE_G1_PROFILE } from './humanoidProfiles';
 
 export type Side = 'left' | 'right';
 export type WalkDirection = 'forward' | 'backward' | 'left' | 'right';
@@ -63,8 +69,15 @@ interface SettleState {
   requiredFrames: number;
 }
 
+export interface HumanoidControlOptions {
+  /** Model-specific joint-name profile. Defaults to the canonical DeepMind
+   *  humanoid mapping. Swap to enable a different MJCF. */
+  profile?: HumanoidProfile;
+}
+
 export class HumanoidControl {
   private sim: MujocoSim;
+  readonly profile: HumanoidProfile;
   private targets = new Map<string, PDTarget>();
   private unregister: (() => void) | null = null;
   private pinRoot = false;
@@ -72,8 +85,9 @@ export class HumanoidControl {
   private groundHeightProvider: GroundHeightProvider | null = null;
   private settle: SettleState | null = null;
 
-  constructor(sim: MujocoSim) {
+  constructor(sim: MujocoSim, opts: HumanoidControlOptions = {}) {
     this.sim = sim;
+    this.profile = opts.profile ?? DEFAULT_HUMANOID_PROFILE;
     this.unregister = sim.setStepHook(() => this.tick());
   }
 
@@ -89,14 +103,18 @@ export class HumanoidControl {
 
   raiseArm(side: Side, angleDeg: number) {
     const a = degToRad(angleDeg);
-    this.setTarget(`shoulder1_${side}`, `shoulder1_${side}`, a, CONTROL.pd.armKp, CONTROL.pd.armKd);
-    this.setTarget(`shoulder2_${side}`, `shoulder2_${side}`, a, CONTROL.pd.armKp, CONTROL.pd.armKd);
+    for (const j of this.profile.shoulderJoints(side)) {
+      this.setTarget(j, j, a, CONTROL.pd.armKp, CONTROL.pd.armKd);
+    }
   }
 
   lowerArm(side: Side) { this.raiseArm(side, 0); }
 
   bendElbow(side: Side, angleDeg: number) {
-    this.setTarget(`elbow_${side}`, `elbow_${side}`, degToRad(angleDeg), CONTROL.pd.elbowKp, CONTROL.pd.elbowKd);
+    const a = degToRad(angleDeg);
+    for (const j of this.profile.elbowJoints(side)) {
+      this.setTarget(j, j, a, CONTROL.pd.elbowKp, CONTROL.pd.elbowKd);
+    }
   }
 
   /**
@@ -187,19 +205,36 @@ export class HumanoidControl {
   // LLM agents) get a typed failure rather than a missing method.
   // ──────────────────────────────────────────────────────────────────────
 
-  turnHead(...args: [yawDeg: number, pitchDeg: number]): never {
-    void args;
-    throw new UnsupportedControlError(
-      'turnHead',
-      'the current humanoid model has no head joint (head is rigidly attached to the torso)',
+  turnHead(yawDeg: number, pitchDeg: number = 0) {
+    if (!this.profile.hasHeadJoint || !this.profile.headYawJoint) {
+      throw new UnsupportedControlError(
+        'turnHead',
+        `model "${this.profile.id}" has no head joint (set hasHeadJoint + headYawJoint on the profile to enable)`,
+      );
+    }
+    this.setTarget(
+      this.profile.headYawJoint,
+      this.profile.headYawJoint,
+      degToRad(yawDeg),
+      CONTROL.pd.elbowKp,
+      CONTROL.pd.elbowKd,
     );
+    if (this.profile.headPitchJoint) {
+      this.setTarget(
+        this.profile.headPitchJoint,
+        this.profile.headPitchJoint,
+        degToRad(pitchDeg),
+        CONTROL.pd.elbowKp,
+        CONTROL.pd.elbowKd,
+      );
+    }
   }
 
   lookAt(...args: [target: [number, number, number]]): never {
     void args;
     throw new UnsupportedControlError(
       'lookAt',
-      'requires a head joint, which the current humanoid model lacks',
+      'inverse-kinematic head solve not yet implemented; use turnHead() with explicit yaw/pitch',
     );
   }
 
