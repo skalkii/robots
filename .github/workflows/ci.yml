@@ -20,7 +20,6 @@ jobs:
         run: npx tsc -b --noEmit
       - name: Lint
         run: npm run lint
-        continue-on-error: true
       - name: Test
         run: npm test
       - name: Build

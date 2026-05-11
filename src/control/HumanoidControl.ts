@@ -4,6 +4,13 @@ import { CONTROL } from '../config';
 export type Side = 'left' | 'right';
 export type WalkDirection = 'forward' | 'backward' | 'left' | 'right';
 
+/** Optional callback so callers can teach the locomotion cheat about
+ *  non-flat terrain. The function receives the robot's world XY position and
+ *  returns the ground height at that location (Z in MuJoCo's frame), or null
+ *  if unknown (in which case the controller falls back to the initial qpos
+ *  Z value, i.e. assumes a flat floor at the original height). */
+export type GroundHeightProvider = (x: number, y: number) => number | null;
+
 interface LocomotionState {
   pos: [number, number];
   yaw: number;
@@ -51,6 +58,7 @@ export class HumanoidControl {
   private unregister: (() => void) | null = null;
   private pinRoot = false;
   private locomotion: LocomotionState | null = null;
+  private groundHeightProvider: GroundHeightProvider | null = null;
 
   constructor(sim: MujocoSim) {
     this.sim = sim;
@@ -144,6 +152,12 @@ export class HumanoidControl {
 
   unpinRoot() { this.pinRoot = false; }
 
+  /** Install a ground-height callback so kinematic locomotion can follow
+   *  uneven terrain. Pass `null` to revert to flat-floor behavior. */
+  setGroundHeightProvider(fn: GroundHeightProvider | null) {
+    this.groundHeightProvider = fn;
+  }
+
   /** Drop everything: PD targets, root pin, locomotion. The robot goes limp. */
   goLimp() {
     this.clearTargets();
@@ -156,14 +170,16 @@ export class HumanoidControl {
   // LLM agents) get a typed failure rather than a missing method.
   // ──────────────────────────────────────────────────────────────────────
 
-  turnHead(_yawDeg: number, _pitchDeg: number): never {
+  turnHead(...args: [yawDeg: number, pitchDeg: number]): never {
+    void args;
     throw new UnsupportedControlError(
       'turnHead',
       'the current humanoid model has no head joint (head is rigidly attached to the torso)',
     );
   }
 
-  lookAt(_target: [number, number, number]): never {
+  lookAt(...args: [target: [number, number, number]]): never {
+    void args;
     throw new UnsupportedControlError(
       'lookAt',
       'requires a head joint, which the current humanoid model lacks',
@@ -277,7 +293,17 @@ export class HumanoidControl {
     const init = this.sim.initialQpos;
     qpos[root.qposAdr + 0] = loco.pos[0];
     qpos[root.qposAdr + 1] = loco.pos[1];
-    qpos[root.qposAdr + 2] = init[root.qposAdr + 2];
+    // Default: keep the torso at its initial height (assumes flat floor at
+    // whatever z the model spawned over). With a ground-height provider,
+    // float the torso so it stays at the same standing offset above local
+    // terrain.
+    const initialZ = init[root.qposAdr + 2];
+    if (this.groundHeightProvider) {
+      const ground = this.groundHeightProvider(loco.pos[0], loco.pos[1]);
+      qpos[root.qposAdr + 2] = ground != null ? ground + initialZ : initialZ;
+    } else {
+      qpos[root.qposAdr + 2] = initialZ;
+    }
     const half = loco.yaw / 2;
     qpos[root.qposAdr + 3] = Math.cos(half);
     qpos[root.qposAdr + 4] = 0;

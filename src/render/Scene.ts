@@ -86,6 +86,9 @@ export class Scene {
     this.followEnabled = enabled ?? !this.followEnabled;
   }
 
+  setPaused(p: boolean) { this.paused = p; }
+  togglePaused() { this.paused = !this.paused; }
+
   start() {
     this.lastTime = performance.now();
     this.accum = 0;

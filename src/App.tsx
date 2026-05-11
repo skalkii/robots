@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { MujocoSim } from './sim/MujocoSim';
 import { Scene } from './render/Scene';
 import { HumanoidControl } from './control/HumanoidControl';
 import { ControlsPanel } from './ui/ControlsPanel';
 import { ChatPanel } from './ui/ChatPanel';
-import { ToastStack, useToasts } from './ui/Toast';
+import { ToastStack } from './ui/Toast';
+import { useToasts } from './ui/useToasts';
 import './App.css';
 
 interface BootProgress {
@@ -80,6 +81,18 @@ export default function App() {
     };
   }, [pushToast]);
 
+  const togglePaused = useCallback(() => {
+    if (!scene) return;
+    scene.togglePaused();
+    setPaused(scene.paused);
+  }, [scene]);
+
+  const toggleFollow = useCallback(() => {
+    if (!scene) return;
+    scene.toggleFollow();
+    setFollowEnabled(scene.followEnabled);
+  }, [scene]);
+
   // Keyboard shortcuts. Skip when the user is typing in a field.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -96,21 +109,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  // togglePaused/toggleFollow depend on scene; re-bind when ready.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scene, control]);
-
-  const togglePaused = () => {
-    if (!scene) return;
-    scene.paused = !scene.paused;
-    setPaused(scene.paused);
-  };
-
-  const toggleFollow = () => {
-    if (!scene) return;
-    scene.toggleFollow();
-    setFollowEnabled(scene.followEnabled);
-  };
+  }, [togglePaused, toggleFollow, control, pushToast]);
 
   return (
     <div className="app">
