@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GeomType, type GeomTypeValue, type GeomDescriptor } from '../sim/types';
 import type { MujocoSim } from '../sim/MujocoSim';
 
@@ -6,12 +7,14 @@ export class Scene {
   readonly scene = new THREE.Scene();
   readonly camera: THREE.PerspectiveCamera;
   readonly renderer: THREE.WebGLRenderer;
+  readonly controls: OrbitControls;
   private meshes: THREE.Object3D[] = [];
   private sim: MujocoSim | null = null;
   private raf = 0;
   private rotMat = new THREE.Matrix4();
   private zUpToYUp = new THREE.Matrix4().makeRotationX(-Math.PI / 2);
   private root = new THREE.Group();
+  paused = false;
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -35,6 +38,14 @@ export class Scene {
 
     this.scene.add(this.root);
 
+    this.controls = new OrbitControls(this.camera, canvas);
+    this.controls.target.set(0, 1, 0);
+    this.controls.enableDamping = true;
+    this.controls.dampingFactor = 0.08;
+    this.controls.minDistance = 1;
+    this.controls.maxDistance = 12;
+    this.controls.update();
+
     this.handleResize();
     window.addEventListener('resize', this.handleResize);
   }
@@ -51,10 +62,11 @@ export class Scene {
 
   start() {
     const tick = () => {
-      if (this.sim) {
+      if (this.sim && !this.paused) {
         for (let i = 0; i < 4; i++) this.sim.step();
-        this.syncFromSim();
       }
+      if (this.sim) this.syncFromSim();
+      this.controls.update();
       this.renderer.render(this.scene, this.camera);
       this.raf = requestAnimationFrame(tick);
     };
@@ -63,6 +75,7 @@ export class Scene {
 
   stop() {
     cancelAnimationFrame(this.raf);
+    this.controls.dispose();
     window.removeEventListener('resize', this.handleResize);
   }
 
