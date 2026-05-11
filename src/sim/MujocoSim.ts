@@ -10,11 +10,20 @@ export interface GeomTransform {
 export interface ActuatorInfo {
   index: number;
   name: string;
-  // Effective control range. If the actuator declares no ctrlrange, falls back
-  // to a symmetric default useful for sliders.
   range: [number, number];
   hasExplicitRange: boolean;
 }
+
+export interface JointAddr {
+  /** Index into `data.qpos`. For hinge/slide joints, the joint angle / position. */
+  qposAdr: number;
+  /** Index into `data.qvel`. */
+  dofAdr: number;
+  /** mjtJoint enum value: 0 free, 1 ball, 2 slide, 3 hinge. */
+  type: number;
+}
+
+export type StepHook = () => void;
 
 export class MujocoSim {
   private mujoco!: MainModule;
@@ -26,6 +35,10 @@ export class MujocoSim {
   njnt = 0;
 
   geoms: GeomDescriptor[] = [];
+
+  private jointAddr = new Map<string, JointAddr>();
+  private actuatorIdx = new Map<string, number>();
+  private stepHooks: StepHook[] = [];
 
   static async load(xmlText: string): Promise<MujocoSim> {
     const sim = new MujocoSim();
@@ -50,7 +63,30 @@ export class MujocoSim {
     this.njnt = this.model.njnt;
 
     this.cacheGeomDescriptors();
+    this.cacheNameLookups();
     this.mujoco.mj_forward(this.model, this.data);
+  }
+
+  private cacheNameLookups() {
+    const qposAdr = this.model.jnt_qposadr as Int32Array;
+    const dofAdr = this.model.jnt_dofadr as Int32Array;
+    const jntType = this.model.jnt_type as Int32Array;
+    for (let i = 0; i < this.njnt; i++) {
+      const acc = this.model.jnt(i);
+      if (acc.name) {
+        this.jointAddr.set(acc.name, {
+          qposAdr: qposAdr[i],
+          dofAdr: dofAdr[i],
+          type: jntType[i],
+        });
+      }
+      acc.delete();
+    }
+    for (let i = 0; i < this.nu; i++) {
+      const acc = this.model.actuator(i);
+      if (acc.name) this.actuatorIdx.set(acc.name, i);
+      acc.delete();
+    }
   }
 
   private cacheGeomDescriptors() {
@@ -70,16 +106,35 @@ export class MujocoSim {
   }
 
   step() {
+    for (const hook of this.stepHooks) hook();
     this.mujoco.mj_step(this.model, this.data);
+  }
+
+  /** Register a callback that fires immediately before every physics step.
+   *  Returns an unregister function. */
+  setStepHook(hook: StepHook): () => void {
+    this.stepHooks.push(hook);
+    return () => {
+      const i = this.stepHooks.indexOf(hook);
+      if (i >= 0) this.stepHooks.splice(i, 1);
+    };
   }
 
   get geomXpos(): Float64Array { return this.data.geom_xpos as Float64Array; }
   get geomXmat(): Float64Array { return this.data.geom_xmat as Float64Array; }
+  get qpos(): Float64Array { return this.data.qpos as Float64Array; }
+  get qvel(): Float64Array { return this.data.qvel as Float64Array; }
 
   get nu(): number { return (this.model as unknown as { nu: number }).nu; }
   get ctrl(): Float64Array { return (this.data as unknown as { ctrl: Float64Array }).ctrl; }
 
   setCtrl(i: number, v: number) { this.ctrl[i] = v; }
+
+  findJoint(name: string): JointAddr | null { return this.jointAddr.get(name) ?? null; }
+  findActuator(name: string): number | null {
+    const v = this.actuatorIdx.get(name);
+    return v === undefined ? null : v;
+  }
 
   actuators(): ActuatorInfo[] {
     const ctrlLimited = this.model.actuator_ctrllimited as Uint8Array;
