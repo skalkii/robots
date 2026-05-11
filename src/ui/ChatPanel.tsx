@@ -1,57 +1,46 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { HumanoidControl } from '../control/HumanoidControl';
-import type { AgentClient, AgentTurn } from '../agent/AgentClient';
-import { MockAgent } from '../agent/MockAgent';
-import { ClaudeAgent } from '../agent/ClaudeAgent';
 import { SpeechRecognizer } from '../agent/SpeechRecognizer';
 import { WebcamCapture } from '../agent/WebcamCapture';
-
-type Provider = 'mock' | 'claude';
-
-interface ChatTurn {
-  id: number;
-  role: 'user' | 'agent' | 'error';
-  text: string;
-  tools?: AgentTurn['tools'];
-}
+import { STORAGE_KEYS } from '../config';
+import { useChatAgent, readProvider, type Provider } from './useChatAgent';
+import { ChatTranscript, type ChatTurn } from './ChatTranscript';
+import { ChatComposer } from './ChatComposer';
+import { ChatSettings } from './ChatSettings';
+import type { ToastKind } from './Toast';
 
 interface Props {
   control: HumanoidControl;
+  onToast?: (kind: ToastKind, message: string) => void;
 }
 
-const STORE_PROVIDER = 'robots.agent.provider';
-const STORE_API_KEY = 'robots.agent.apiKey';
-
-export function ChatPanel({ control }: Props) {
-  const [provider, setProvider] = useState<Provider>(() => (localStorage.getItem(STORE_PROVIDER) as Provider) || 'mock');
-  const [apiKey, setApiKey] = useState<string>(() => localStorage.getItem(STORE_API_KEY) || '');
-  const [draftKey, setDraftKey] = useState<string>(apiKey);
+export function ChatPanel({ control, onToast }: Props) {
+  const pushToast = useCallback(
+    (kind: ToastKind, message: string) => onToast?.(kind, message),
+    [onToast],
+  );
+  const [provider, setProvider] = useState<Provider>(() => readProvider(localStorage.getItem(STORAGE_KEYS.provider)));
+  const [apiKey, setApiKey] = useState<string>(() => localStorage.getItem(STORAGE_KEYS.apiKey) || '');
   const [settingsOpen, setSettingsOpen] = useState(false);
+
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [listening, setListening] = useState(false);
   const [interim, setInterim] = useState('');
   const [cameraOn, setCameraOn] = useState(false);
-  const transcriptRef = useRef<HTMLDivElement | null>(null);
+
   const idRef = useRef(0);
   const recognizerRef = useRef<SpeechRecognizer | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const webcamRef = useRef<WebcamCapture | null>(null);
+
   const speechSupported =
-    recognizerRef.current?.supported ??
-    (typeof window !== 'undefined' && !!(window.SpeechRecognition ?? window.webkitSpeechRecognition));
+    typeof window !== 'undefined' && !!(window.SpeechRecognition ?? window.webkitSpeechRecognition);
   const cameraSupported =
     typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia;
 
-  const agent: AgentClient = useMemo(() => {
-    if (provider === 'claude' && apiKey) return new ClaudeAgent(apiKey);
-    return new MockAgent();
-  }, [provider, apiKey]);
-
-  useEffect(() => {
-    transcriptRef.current?.scrollTo({ top: 1e9, behavior: 'smooth' });
-  }, [turns]);
+  const agent = useChatAgent(provider, apiKey);
 
   const nextId = useCallback(() => ++idRef.current, []);
 
@@ -66,59 +55,46 @@ export function ChatPanel({ control }: Props) {
     setBusy(true);
     try {
       const turn = await agent.respond(trimmed, control, frame);
-      setTurns(prev => [...prev, { id: nextId(), role: 'agent', text: turn.text, tools: turn.tools }]);
+      setTurns(prev => [...prev, {
+        id: nextId(),
+        role: 'agent',
+        text: turn.text,
+        tools: turn.tools,
+        usage: turn.usage,
+        truncated: turn.truncated,
+      }]);
+      if (turn.truncated) pushToast('warn', 'Agent reply truncated by tool-round cap.');
     } catch (err) {
-      setTurns(prev => [
-        ...prev,
-        { id: nextId(), role: 'error', text: (err as Error).message },
-      ]);
+      const msg = (err as Error).message;
+      setTurns(prev => [...prev, { id: nextId(), role: 'error', text: msg }]);
+      pushToast('error', msg);
     } finally {
       setBusy(false);
     }
-  }, [agent, busy, control, nextId]);
-
-  const onSubmit = (e: FormEvent) => {
-    e.preventDefault();
-    submit(input);
-  };
+  }, [agent, busy, control, nextId, pushToast]);
 
   const ensureRecognizer = useCallback(() => {
     if (recognizerRef.current) return recognizerRef.current;
     const r = new SpeechRecognizer({
       onInterim: text => setInterim(text),
-      onFinal: text => {
-        setInterim('');
-        // Auto-submit the final transcript.
-        submit(text);
-      },
+      onFinal: text => { setInterim(''); submit(text); },
       onError: msg => {
         setInterim('');
         setListening(false);
-        setTurns(prev => [...prev, { id: nextId(), role: 'error', text: `speech: ${msg}` }]);
+        pushToast('error', `speech: ${msg}`);
       },
-      onEnd: () => {
-        setListening(false);
-        setInterim('');
-      },
+      onEnd: () => { setListening(false); setInterim(''); },
     });
     recognizerRef.current = r;
     return r;
-  }, [nextId, submit]);
+  }, [submit, pushToast]);
 
   const toggleMic = () => {
     const r = ensureRecognizer();
     if (!r.supported) return;
-    if (r.isRunning) {
-      r.stop();
-      setListening(false);
-    } else {
-      r.start();
-      setListening(true);
-    }
+    if (r.isRunning) { r.stop(); setListening(false); }
+    else { r.start(); setListening(true); }
   };
-
-  useEffect(() => () => recognizerRef.current?.abort(), []);
-  useEffect(() => () => webcamRef.current?.stop(), []);
 
   const toggleCamera = async () => {
     if (!cameraSupported || !videoRef.current) return;
@@ -127,7 +103,7 @@ export function ChatPanel({ control }: Props) {
         videoEl: videoRef.current,
         onError: msg => {
           setCameraOn(false);
-          setTurns(prev => [...prev, { id: nextId(), role: 'error', text: `camera: ${msg}` }]);
+          pushToast('error', `camera: ${msg}`);
         },
       });
     }
@@ -140,11 +116,23 @@ export function ChatPanel({ control }: Props) {
     }
   };
 
-  const saveSettings = () => {
-    localStorage.setItem(STORE_PROVIDER, provider);
-    localStorage.setItem(STORE_API_KEY, draftKey);
-    setApiKey(draftKey);
+  useEffect(() => () => recognizerRef.current?.abort(), []);
+  useEffect(() => () => webcamRef.current?.stop(), []);
+
+  const saveSettings = (p: Provider, k: string) => {
+    localStorage.setItem(STORAGE_KEYS.provider, p);
+    localStorage.setItem(STORAGE_KEYS.apiKey, k);
+    setProvider(p);
+    setApiKey(k);
     setSettingsOpen(false);
+    agent.resetConversation?.();
+    pushToast('success', `Agent: ${p === 'claude' ? 'Claude Haiku 4.5' : 'Mock (offline)'}`);
+  };
+
+  const resetConversation = () => {
+    agent.resetConversation?.();
+    setTurns([]);
+    pushToast('info', 'Chat history reset.');
   };
 
   return (
@@ -154,109 +142,48 @@ export function ChatPanel({ control }: Props) {
         <span className="agent-label">{agent.label}</span>
         <button
           type="button"
-          className={`chat-camera ${cameraOn ? 'on' : ''}`}
-          onClick={toggleCamera}
-          disabled={!cameraSupported || busy}
-          title={cameraSupported ? (cameraOn ? 'Disable webcam' : 'Enable webcam — attaches one frame per message') : 'Webcam not supported'}
-          aria-label="Toggle webcam"
+          className="chat-settings"
+          onClick={() => setSettingsOpen(o => !o)}
+          aria-pressed={settingsOpen}
+          aria-label="Agent settings"
         >
-          {cameraOn ? '📷' : '📷'}<span className="dot" />
-        </button>
-        <button className="chat-settings" onClick={() => setSettingsOpen(o => !o)} aria-label="Settings">
           ⚙
         </button>
       </header>
+
+      {settingsOpen && (
+        <ChatSettings
+          provider={provider}
+          apiKey={apiKey}
+          onSave={saveSettings}
+          onClose={() => setSettingsOpen(false)}
+          onResetConversation={resetConversation}
+        />
+      )}
 
       <video
         ref={videoRef}
         className={`webcam-preview ${cameraOn ? 'on' : ''}`}
         playsInline
         muted
+        aria-hidden={!cameraOn}
       />
 
+      <ChatTranscript turns={turns} busy={busy} />
 
-      {settingsOpen && (
-        <div className="chat-settings-pane">
-          <label className="provider-row">
-            <span>Provider</span>
-            <select value={provider} onChange={e => setProvider(e.target.value as Provider)}>
-              <option value="mock">Mock (offline regex)</option>
-              <option value="claude">Claude Haiku 4.5 (API)</option>
-            </select>
-          </label>
-          <label className="key-row">
-            <span>Anthropic API key</span>
-            <input
-              type="password"
-              autoComplete="off"
-              placeholder="sk-ant-…"
-              value={draftKey}
-              onChange={e => setDraftKey(e.target.value)}
-            />
-          </label>
-          <p className="key-warning">
-            Stored in your browser's localStorage. Never share this app's URL with the key embedded.
-          </p>
-          <div className="settings-buttons">
-            <button onClick={saveSettings}>Save</button>
-            <button onClick={() => { setDraftKey(apiKey); setSettingsOpen(false); }}>Cancel</button>
-          </div>
-        </div>
-      )}
-
-      <div className="chat-transcript" ref={transcriptRef}>
-        {turns.length === 0 && (
-          <div className="chat-empty">
-            Try: "raise your right arm", "bend left elbow to 90", "stand and don't fall".
-          </div>
-        )}
-        {turns.map(t => (
-          <div key={t.id} className={`turn turn-${t.role}`}>
-            <div className="turn-text">{t.text}</div>
-            {t.tools && t.tools.length > 0 && (
-              <ul className="tool-trace">
-                {t.tools.map((tc, i) => (
-                  <li key={i} className={tc.result.ok ? 'tool-ok' : 'tool-err'}>
-                    <code>{tc.call.name}</code>
-                    {Object.keys(tc.call.input).length > 0 && (
-                      <span className="tool-args">({JSON.stringify(tc.call.input)})</span>
-                    )}
-                    <span className="tool-result"> → {tc.result.message}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        ))}
-        {busy && <div className="turn turn-agent loading">…thinking</div>}
-      </div>
-
-      <form className="chat-input" onSubmit={onSubmit}>
-        <button
-          type="button"
-          className={`mic ${listening ? 'mic-on' : ''}`}
-          onClick={toggleMic}
-          disabled={!speechSupported || busy}
-          title={speechSupported ? (listening ? 'Stop listening' : 'Speak') : 'Speech recognition not supported in this browser'}
-          aria-label="Toggle microphone"
-        >
-          {listening ? '■' : '🎙'}
-        </button>
-        <input
-          type="text"
-          placeholder={
-            listening
-              ? interim || 'Listening…'
-              : busy
-                ? 'Working…'
-                : 'Tell the robot what to do'
-          }
-          value={listening ? interim : input}
-          onChange={e => setInput(e.target.value)}
-          disabled={busy || listening}
-        />
-        <button type="submit" disabled={busy || listening || !input.trim()}>Send</button>
-      </form>
+      <ChatComposer
+        input={input}
+        setInput={setInput}
+        onSubmit={submit}
+        busy={busy}
+        listening={listening}
+        interim={interim}
+        onToggleMic={toggleMic}
+        micSupported={speechSupported}
+        cameraOn={cameraOn}
+        onToggleCamera={toggleCamera}
+        cameraSupported={cameraSupported}
+      />
     </section>
   );
 }

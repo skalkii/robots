@@ -405,3 +405,155 @@
   0%, 100% { box-shadow: 0 0 0 0 rgba(191, 97, 106, 0.5); }
   50%      { box-shadow: 0 0 0 6px rgba(191, 97, 106, 0); }
 }
+
+.chat-input button.cam {
+  background: #2b313c;
+  color: #d8dee9;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  width: 44px;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1;
+  position: relative;
+}
+
+.chat-input button.cam .dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 4px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.2);
+  vertical-align: middle;
+}
+
+.chat-input button.cam.cam-on .dot {
+  background: #bf616a;
+  box-shadow: 0 0 6px #bf616a;
+}
+
+/* Focus rings — visible on keyboard navigation only. */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid #88c0d0;
+  outline-offset: 2px;
+}
+
+/* Toast stack */
+.toast-stack {
+  position: fixed;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 6px;
+  z-index: 999;
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  background: rgba(40, 46, 58, 0.95);
+  color: #eceff4;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-left: 3px solid #88c0d0;
+  border-radius: 6px;
+  padding: 8px 14px;
+  font: 12px/1.4 ui-sans-serif, system-ui, sans-serif;
+  cursor: pointer;
+  text-align: left;
+  max-width: 480px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+.toast-success { border-left-color: #a3be8c; }
+.toast-warn    { border-left-color: #f0b250; }
+.toast-error   { border-left-color: #bf616a; }
+
+/* Scroll-stick hint */
+.scroll-hint {
+  position: sticky;
+  bottom: 0;
+  align-self: center;
+  font-size: 10px;
+  opacity: 0.6;
+  background: rgba(20, 24, 32, 0.85);
+  border-radius: 4px;
+  padding: 2px 8px;
+  pointer-events: none;
+}
+
+/* Turn-usage line */
+.turn-usage {
+  margin-top: 4px;
+  font-size: 10px;
+  opacity: 0.55;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* Boot progress bar in HUD */
+.boot-progress {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 220px;
+  pointer-events: none;
+}
+.boot-bar {
+  height: 4px;
+  background: linear-gradient(90deg, #88c0d0 30%, transparent 30%);
+  background-size: 200% 100%;
+  border-radius: 2px;
+  animation: boot-slide 1.6s linear infinite;
+  opacity: 0.85;
+}
+@keyframes boot-slide {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -100% 0; }
+}
+.boot-hint { font-size: 10px; opacity: 0.55; }
+
+/* Keyboard-shortcut legend in HUD */
+.hud-help {
+  margin-top: 8px;
+  font-size: 10px;
+  opacity: 0.45;
+  pointer-events: none;
+}
+.hud-help kbd {
+  display: inline-block;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 3px;
+  padding: 0 4px;
+  margin: 0 1px;
+  font: inherit;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* Responsive breakpoints */
+@media (max-width: 920px) {
+  .controls {
+    width: min(280px, 38vw);
+  }
+  .chat {
+    width: min(420px, calc(100vw - 24px));
+    max-width: calc(100vw - 24px);
+    max-height: 50vh;
+  }
+}
+
+@media (max-width: 640px) {
+  .controls {
+    width: calc(100vw - 24px);
+    bottom: auto;
+    max-height: 40vh;
+  }
+  .chat {
+    width: calc(100vw - 24px);
+    max-height: 45vh;
+  }
+  .hud-help { display: none; }
+}
