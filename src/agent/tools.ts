@@ -1,4 +1,4 @@
-import type { HumanoidControl, Side } from '../control/HumanoidControl';
+import type { HumanoidControl, Side, WalkDirection } from '../control/HumanoidControl';
 
 /**
  * Tool schema in Anthropic Messages-API format. The MockAgent accepts the
@@ -70,8 +70,43 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
     },
   },
   {
+    name: 'walk',
+    description:
+      'Kinematically translate the robot a given distance in a robot-relative direction. ' +
+      'Limb posture is preserved but the gait is faked (the torso glides) — this is a demo cheat. ' +
+      'Typical speeds are 0.5–1.5 m/s. Default speed is 1.0 m/s if omitted.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        direction: { type: 'string', enum: ['forward', 'backward', 'left', 'right'] },
+        distance_m: { type: 'number', description: 'Distance to travel in meters.' },
+        speed_mps: { type: 'number', description: 'Optional speed in meters per second.' },
+      },
+      required: ['direction', 'distance_m'],
+    },
+  },
+  {
+    name: 'turn',
+    description:
+      'Rotate the robot in place about its vertical axis. Positive degrees turn counter-clockwise ' +
+      '(viewed from above) — i.e. to the robot\'s left. Default rate 90°/s.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        degrees: { type: 'number', description: 'Yaw delta in degrees (+ left, - right).' },
+        rate_dps: { type: 'number', description: 'Optional angular rate in degrees per second.' },
+      },
+      required: ['degrees'],
+    },
+  },
+  {
+    name: 'stop_motion',
+    description: 'Cancel any in-progress walk/turn. Limb PD targets are kept.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
     name: 'release_all',
-    description: 'Drop every active PD target and unpin the root. The robot goes limp.',
+    description: 'Drop every active PD target, cancel locomotion, and unpin the root. The robot goes limp.',
     input_schema: { type: 'object', properties: {} },
   },
 ];
@@ -112,6 +147,26 @@ export function executeTool(control: HumanoidControl, call: ToolCall): ToolResul
         control.stand({ pinRoot: pin_root === true });
         return ok(`standing${pin_root ? ' (root pinned)' : ''}`);
       }
+      case 'walk': {
+        const { direction, distance_m, speed_mps } = call.input as {
+          direction?: WalkDirection;
+          distance_m?: number;
+          speed_mps?: number;
+        };
+        if (!isWalkDir(direction) || typeof distance_m !== 'number') return bad('walk: invalid args');
+        control.walk(direction, distance_m, typeof speed_mps === 'number' ? speed_mps : 1.0);
+        return ok(`walking ${direction} ${distance_m}m`);
+      }
+      case 'turn': {
+        const { degrees, rate_dps } = call.input as { degrees?: number; rate_dps?: number };
+        if (typeof degrees !== 'number') return bad('turn: invalid args');
+        control.turn(degrees, typeof rate_dps === 'number' ? rate_dps : 90);
+        return ok(`turning ${degrees}°`);
+      }
+      case 'stop_motion': {
+        control.stop();
+        return ok('stopped locomotion');
+      }
       case 'release_all': {
         control.releaseAll();
         return ok('released all targets');
@@ -125,5 +180,8 @@ export function executeTool(control: HumanoidControl, call: ToolCall): ToolResul
 }
 
 function isSide(v: unknown): v is Side { return v === 'left' || v === 'right'; }
+function isWalkDir(v: unknown): v is WalkDirection {
+  return v === 'forward' || v === 'backward' || v === 'left' || v === 'right';
+}
 function ok(message: string): ToolResult { return { ok: true, message }; }
 function bad(message: string): ToolResult { return { ok: false, message }; }

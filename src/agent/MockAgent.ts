@@ -42,6 +42,28 @@ function parse(raw: string): ToolCall[] {
     calls.push({ name: 'release_all', input: {} });
   }
 
+  // Locomotion: "walk forward 2 meters", "go back 1m", "step left .5".
+  const walkMatch = text.match(/\b(?:walk|step|go|move)\b[^.]*\b(forward|backward|back|left|right)\b[^.]*?(-?\d+(?:\.\d+)?)?\s*(?:m|meter|meters)?/);
+  if (walkMatch) {
+    const dirRaw = walkMatch[1];
+    const dir = dirRaw === 'back' ? 'backward' : (dirRaw as 'forward' | 'backward' | 'left' | 'right');
+    const distance = walkMatch[2] ? Number(walkMatch[2]) : 1;
+    calls.push({ name: 'walk', input: { direction: dir, distance_m: distance } });
+  }
+
+  // Turning: "turn left 90", "rotate 45 degrees right".
+  const turnMatch = text.match(/\b(?:turn|rotate|spin)\b[^.]*?(?:(left|right)\s+)?(-?\d+(?:\.\d+)?)(?:\s*(?:deg|degree|°))?(?:[^.]*?(left|right))?/);
+  if (turnMatch && /\b(?:turn|rotate|spin)\b/.test(text)) {
+    const dir = turnMatch[1] || turnMatch[3];
+    const magnitude = Number(turnMatch[2]);
+    const sign = dir === 'right' ? -1 : 1;
+    calls.push({ name: 'turn', input: { degrees: sign * magnitude } });
+  }
+
+  if (/\bstop\b/.test(text) && !calls.some(c => c.name === 'walk' || c.name === 'turn')) {
+    calls.push({ name: 'stop_motion', input: {} });
+  }
+
   for (const side of ['left', 'right'] as const) {
     if (new RegExp(`(raise|lift|wave)[^.]*\\b${side}\\b[^.]*\\barm\\b|\\b${side}\\b[^.]*\\barm\\b[^.]*\\b(up|raise|wave)\\b`).test(text)) {
       const angle = extractAngle(text) ?? 90;

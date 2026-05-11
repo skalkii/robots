@@ -72,6 +72,13 @@ export function ControlsPanel({ sim, control, paused, onTogglePaused }: Props) {
               <button className="span2" onClick={() => runCommand(() => control.stand({ pinRoot: true }))}>
                 Stand (pinned root)
               </button>
+              <button onClick={() => runCommand(() => control.walk('forward', 1))}>Walk fwd 1m</button>
+              <button onClick={() => runCommand(() => control.walk('backward', 1))}>Walk back 1m</button>
+              <button onClick={() => runCommand(() => control.turn(90))}>Turn L 90°</button>
+              <button onClick={() => runCommand(() => control.turn(-90))}>Turn R 90°</button>
+              <button className="span2" onClick={() => runCommand(() => control.stop())}>
+                Stop motion
+              </button>
               <button className="span2" onClick={() => runCommand(() => control.releaseAll())}>
                 Release all targets
               </button>
