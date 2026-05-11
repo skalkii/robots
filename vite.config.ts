@@ -35,6 +35,10 @@ export default defineConfig({
     },
   },
   server: {
+    // Bind to localhost only by default so an accidental `--host` doesn't
+    // expose the locally-stored API key on a shared network. CI / preview
+    // deployments override via `--host 0.0.0.0` if they really mean it.
+    host: '127.0.0.1',
     fs: {
       allow: ['..'],
     },

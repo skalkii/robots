@@ -4,7 +4,39 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>robots</title>
+    <!--
+      Content-Security-Policy
+      ────────────────────────────────────────────────────────────────────
+      script-src: self + 'wasm-unsafe-eval' for MuJoCo's emscripten module.
+      connect-src: self (Vite HMR) + Anthropic API host.
+      worker-src: blob: so the wasm runtime can spawn its initializer.
+      img-src: self + data: + blob: so the webcam preview and captured
+               JPEG frames work.
+      media-src: blob: for the live webcam stream.
+      object-src 'none' / base-uri 'self' / frame-ancestors 'none' — hardens
+      the page against tag injection.
+
+      `unsafe-inline` for style-src covers Three.js / React Hot Reload
+      inline style attributes. Tightening this further would require
+      tagging every emitted inline style with a nonce.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="
+        default-src 'self';
+        script-src 'self' 'wasm-unsafe-eval';
+        style-src 'self' 'unsafe-inline';
+        img-src 'self' data: blob:;
+        media-src 'self' blob:;
+        worker-src 'self' blob:;
+        connect-src 'self' https://api.anthropic.com ws: wss:;
+        font-src 'self' data:;
+        object-src 'none';
+        base-uri 'self';
+        frame-ancestors 'none';
+      "
+    />
+    <title>robots — humanoid bot control interface</title>
   </head>
   <body>
     <div id="root"></div>
