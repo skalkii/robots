@@ -64,6 +64,8 @@ export const STORAGE_KEYS = {
   history: 'robots.agent.history',
   /** UI-rendered transcript (`ChatTurn[]`). */
   transcript: 'robots.agent.transcript',
+  /** Endpoint URL for the server-proxy agent (e.g. `/api/agent`). */
+  proxyEndpoint: 'robots.agent.proxyEndpoint',
 } as const;
 
 /**

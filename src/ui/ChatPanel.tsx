@@ -22,6 +22,9 @@ export function ChatPanel({ control, onToast }: Props) {
   );
   const [provider, setProvider] = useState<Provider>(() => readProvider(localStorage.getItem(STORAGE_KEYS.provider)));
   const [apiKey, setApiKey] = useState<string>(() => localStorage.getItem(STORAGE_KEYS.apiKey) || '');
+  const [proxyEndpoint, setProxyEndpoint] = useState<string>(
+    () => localStorage.getItem(STORAGE_KEYS.proxyEndpoint) || '/api/agent',
+  );
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const [input, setInput] = useState('');
@@ -47,7 +50,7 @@ export function ChatPanel({ control, onToast }: Props) {
   const cameraSupported =
     typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia;
 
-  const agent = useChatAgent(provider, apiKey);
+  const agent = useChatAgent(provider, apiKey, proxyEndpoint);
 
   const nextId = useCallback(() => ++idRef.current, []);
 
@@ -143,14 +146,20 @@ export function ChatPanel({ control, onToast }: Props) {
   useEffect(() => () => recognizerRef.current?.abort(), []);
   useEffect(() => () => webcamRef.current?.stop(), []);
 
-  const saveSettings = (p: Provider, k: string) => {
+  const saveSettings = (p: Provider, k: string, endpoint: string) => {
     localStorage.setItem(STORAGE_KEYS.provider, p);
     localStorage.setItem(STORAGE_KEYS.apiKey, k);
+    localStorage.setItem(STORAGE_KEYS.proxyEndpoint, endpoint);
     setProvider(p);
     setApiKey(k);
+    setProxyEndpoint(endpoint);
     setSettingsOpen(false);
     agent.resetConversation?.();
-    pushToast('success', `Agent: ${p === 'claude' ? 'Claude Haiku 4.5' : 'Mock (offline)'}`);
+    const label =
+      p === 'claude' ? 'Claude Haiku 4.5'
+      : p === 'server' ? `Server proxy (${endpoint})`
+      : 'Mock (offline)';
+    pushToast('success', `Agent: ${label}`);
   };
 
   const resetConversation = () => {
@@ -188,6 +197,7 @@ export function ChatPanel({ control, onToast }: Props) {
         <ChatSettings
           provider={provider}
           apiKey={apiKey}
+          proxyEndpoint={proxyEndpoint}
           onSave={saveSettings}
           onClose={() => setSettingsOpen(false)}
           onResetConversation={resetConversation}

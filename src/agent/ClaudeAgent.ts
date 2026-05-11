@@ -16,21 +16,21 @@ const SYSTEM_PROMPT =
   'After tool calls, reply with one short sentence confirming what you did. ' +
   'If the user asks something the robot cannot do, say so plainly.';
 
-type TextBlock = { type: 'text'; text: string };
-type ImageBlock = {
+export type TextBlock = { type: 'text'; text: string };
+export type ImageBlock = {
   type: 'image';
   source: { type: 'base64'; media_type: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'; data: string };
 };
-type ToolUseBlock = { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> };
-type ToolResultBlock = { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean };
-type ContentBlock = TextBlock | ImageBlock | ToolUseBlock | ToolResultBlock;
+export type ToolUseBlock = { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> };
+export type ToolResultBlock = { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean };
+export type ContentBlock = TextBlock | ImageBlock | ToolUseBlock | ToolResultBlock;
 
-interface ApiMessage {
+export interface ApiMessage {
   role: 'user' | 'assistant';
   content: string | ContentBlock[];
 }
 
-interface ApiResponse {
+export interface ApiResponse {
   id: string;
   role: 'assistant';
   content: ContentBlock[];
@@ -42,6 +42,8 @@ interface ApiResponse {
     cache_creation_input_tokens?: number;
   };
 }
+
+export { SYSTEM_PROMPT };
 
 const RETRYABLE = new Set<number>(AGENT.retry.retryableStatus as readonly number[]);
 
@@ -196,7 +198,7 @@ export class ClaudeAgent implements AgentClient {
   }
 }
 
-function extractText(content: ContentBlock[]): string {
+export function extractText(content: ContentBlock[]): string {
   return content
     .filter((b): b is TextBlock => b.type === 'text')
     .map(b => b.text)
@@ -204,7 +206,7 @@ function extractText(content: ContentBlock[]): string {
     .trim();
 }
 
-function accumulateUsage(into: UsageStats, u: ApiResponse['usage']) {
+export function accumulateUsage(into: UsageStats, u: ApiResponse['usage']) {
   if (!u) return;
   into.inputTokens += u.input_tokens ?? 0;
   into.outputTokens += u.output_tokens ?? 0;
@@ -331,14 +333,14 @@ export async function parseSseStream(
  *  recent multi-turn context. */
 const MAX_PERSISTED_MESSAGES = 40;
 
-function persistHistory(messages: ApiMessage[]) {
+export function persistHistory(messages: ApiMessage[]) {
   try {
     const trimmed = messages.slice(-MAX_PERSISTED_MESSAGES).map(stripImages);
     localStorage.setItem(STORAGE_KEYS.history, JSON.stringify(trimmed));
   } catch { /* quota exceeded or private mode — silently skip */ }
 }
 
-function restoreHistory(): ApiMessage[] {
+export function restoreHistory(): ApiMessage[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.history);
     if (!raw) return [];
