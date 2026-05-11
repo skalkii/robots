@@ -4,8 +4,10 @@ import type { HumanoidControl, Side, WalkDirection } from '../control/HumanoidCo
  * Tool schema in Anthropic Messages-API format. The MockAgent accepts the
  * same shape so both providers share one dispatcher.
  *
- * Designed in terms of intent (raise arm, stand) rather than joint angles
- * so the model doesn't have to reason about MuJoCo internals.
+ * Tools are registered once via `register()`. The registry is the single
+ * source of truth: `TOOL_SCHEMAS` (for prompt construction) and
+ * `executeTool` (for dispatch) both read from it. Adding a tool = add one
+ * `register({...})` call.
  */
 export interface ToolSchema {
   name: string;
@@ -17,8 +19,38 @@ export interface ToolSchema {
   };
 }
 
-export const TOOL_SCHEMAS: ToolSchema[] = [
-  {
+export interface ToolCall {
+  name: string;
+  input: Record<string, unknown>;
+}
+
+export interface ToolResult {
+  ok: boolean;
+  message: string;
+}
+
+type ToolHandler = (control: HumanoidControl, input: Record<string, unknown>) => ToolResult;
+
+interface ToolRegistration {
+  schema: ToolSchema;
+  handler: ToolHandler;
+}
+
+const REGISTRY = new Map<string, ToolRegistration>();
+
+function register(reg: ToolRegistration) {
+  if (REGISTRY.has(reg.schema.name)) {
+    throw new Error(`tool already registered: ${reg.schema.name}`);
+  }
+  REGISTRY.set(reg.schema.name, reg);
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Tool definitions
+// ──────────────────────────────────────────────────────────────────────────
+
+register({
+  schema: {
     name: 'raise_arm',
     description:
       "Raise one of the humanoid's arms toward a target shoulder angle in degrees. " +
@@ -33,18 +65,34 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
       required: ['side', 'angle_deg'],
     },
   },
-  {
+  handler: (control, input) => {
+    const { side, angle_deg } = input as { side?: Side; angle_deg?: number };
+    if (!isSide(side) || typeof angle_deg !== 'number') return bad('raise_arm: invalid args');
+    control.raiseArm(side, angle_deg);
+    return ok(`raised ${side} arm to ${angle_deg}°`);
+  },
+});
+
+register({
+  schema: {
     name: 'lower_arm',
     description: 'Return one arm to the relaxed (0°) shoulder angle.',
     input_schema: {
       type: 'object',
-      properties: {
-        side: { type: 'string', enum: ['left', 'right'] },
-      },
+      properties: { side: { type: 'string', enum: ['left', 'right'] } },
       required: ['side'],
     },
   },
-  {
+  handler: (control, input) => {
+    const { side } = input as { side?: Side };
+    if (!isSide(side)) return bad('lower_arm: invalid side');
+    control.lowerArm(side);
+    return ok(`lowered ${side} arm`);
+  },
+});
+
+register({
+  schema: {
     name: 'bend_elbow',
     description: 'Bend one elbow to a target angle in degrees. Higher values curl the forearm in.',
     input_schema: {
@@ -56,7 +104,16 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
       required: ['side', 'angle_deg'],
     },
   },
-  {
+  handler: (control, input) => {
+    const { side, angle_deg } = input as { side?: Side; angle_deg?: number };
+    if (!isSide(side) || typeof angle_deg !== 'number') return bad('bend_elbow: invalid args');
+    control.bendElbow(side, angle_deg);
+    return ok(`bent ${side} elbow to ${angle_deg}°`);
+  },
+});
+
+register({
+  schema: {
     name: 'stand',
     description:
       'Hold the humanoid in its default standing pose. Set pin_root=true to lock the torso ' +
@@ -69,7 +126,15 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
       },
     },
   },
-  {
+  handler: (control, input) => {
+    const { pin_root } = input as { pin_root?: boolean };
+    control.stand({ pinRoot: pin_root === true });
+    return ok(`standing${pin_root ? ' (root pinned)' : ''}`);
+  },
+});
+
+register({
+  schema: {
     name: 'walk',
     description:
       'Kinematically translate the robot a given distance in a robot-relative direction. ' +
@@ -85,11 +150,24 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
       required: ['direction', 'distance_m'],
     },
   },
-  {
+  handler: (control, input) => {
+    const { direction, distance_m, speed_mps } = input as {
+      direction?: WalkDirection;
+      distance_m?: number;
+      speed_mps?: number;
+    };
+    if (!isWalkDir(direction) || typeof distance_m !== 'number') return bad('walk: invalid args');
+    control.walk(direction, distance_m, typeof speed_mps === 'number' ? speed_mps : 1.0);
+    return ok(`walking ${direction} ${distance_m}m`);
+  },
+});
+
+register({
+  schema: {
     name: 'turn',
     description:
       'Rotate the robot in place about its vertical axis. Positive degrees turn counter-clockwise ' +
-      '(viewed from above) — i.e. to the robot\'s left. Default rate 90°/s.',
+      "(viewed from above) — i.e. to the robot's left. Default rate 90°/s.",
     input_schema: {
       type: 'object',
       properties: {
@@ -99,84 +177,49 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
       required: ['degrees'],
     },
   },
-  {
+  handler: (control, input) => {
+    const { degrees, rate_dps } = input as { degrees?: number; rate_dps?: number };
+    if (typeof degrees !== 'number') return bad('turn: invalid args');
+    control.turn(degrees, typeof rate_dps === 'number' ? rate_dps : 90);
+    return ok(`turning ${degrees}°`);
+  },
+});
+
+register({
+  schema: {
     name: 'stop_motion',
     description: 'Cancel any in-progress walk/turn. Limb PD targets are kept.',
     input_schema: { type: 'object', properties: {} },
   },
-  {
+  handler: control => {
+    control.cancelMotion();
+    return ok('stopped locomotion');
+  },
+});
+
+register({
+  schema: {
     name: 'release_all',
     description: 'Drop every active PD target, cancel locomotion, and unpin the root. The robot goes limp.',
     input_schema: { type: 'object', properties: {} },
   },
-];
+  handler: control => {
+    control.goLimp();
+    return ok('released all targets');
+  },
+});
 
-export interface ToolCall {
-  name: string;
-  input: Record<string, unknown>;
-}
+// ──────────────────────────────────────────────────────────────────────────
+// Exports
+// ──────────────────────────────────────────────────────────────────────────
 
-export interface ToolResult {
-  ok: boolean;
-  message: string;
-}
+export const TOOL_SCHEMAS: ToolSchema[] = Array.from(REGISTRY.values(), r => r.schema);
 
 export function executeTool(control: HumanoidControl, call: ToolCall): ToolResult {
-  try {
-    switch (call.name) {
-      case 'raise_arm': {
-        const { side, angle_deg } = call.input as { side?: Side; angle_deg?: number };
-        if (!isSide(side) || typeof angle_deg !== 'number') return bad('raise_arm: invalid args');
-        control.raiseArm(side, angle_deg);
-        return ok(`raised ${side} arm to ${angle_deg}°`);
-      }
-      case 'lower_arm': {
-        const { side } = call.input as { side?: Side };
-        if (!isSide(side)) return bad('lower_arm: invalid side');
-        control.lowerArm(side);
-        return ok(`lowered ${side} arm`);
-      }
-      case 'bend_elbow': {
-        const { side, angle_deg } = call.input as { side?: Side; angle_deg?: number };
-        if (!isSide(side) || typeof angle_deg !== 'number') return bad('bend_elbow: invalid args');
-        control.bendElbow(side, angle_deg);
-        return ok(`bent ${side} elbow to ${angle_deg}°`);
-      }
-      case 'stand': {
-        const { pin_root } = call.input as { pin_root?: boolean };
-        control.stand({ pinRoot: pin_root === true });
-        return ok(`standing${pin_root ? ' (root pinned)' : ''}`);
-      }
-      case 'walk': {
-        const { direction, distance_m, speed_mps } = call.input as {
-          direction?: WalkDirection;
-          distance_m?: number;
-          speed_mps?: number;
-        };
-        if (!isWalkDir(direction) || typeof distance_m !== 'number') return bad('walk: invalid args');
-        control.walk(direction, distance_m, typeof speed_mps === 'number' ? speed_mps : 1.0);
-        return ok(`walking ${direction} ${distance_m}m`);
-      }
-      case 'turn': {
-        const { degrees, rate_dps } = call.input as { degrees?: number; rate_dps?: number };
-        if (typeof degrees !== 'number') return bad('turn: invalid args');
-        control.turn(degrees, typeof rate_dps === 'number' ? rate_dps : 90);
-        return ok(`turning ${degrees}°`);
-      }
-      case 'stop_motion': {
-        control.stop();
-        return ok('stopped locomotion');
-      }
-      case 'release_all': {
-        control.releaseAll();
-        return ok('released all targets');
-      }
-      default:
-        return bad(`unknown tool: ${call.name}`);
-    }
-  } catch (err) {
-    return bad((err as Error).message);
-  }
+  const reg = REGISTRY.get(call.name);
+  if (!reg) return bad(`unknown tool: ${call.name}`);
+  try { return reg.handler(control, call.input); }
+  catch (err) { return bad((err as Error).message); }
 }
 
 function isSide(v: unknown): v is Side { return v === 'left' || v === 'right'; }
