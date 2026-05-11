@@ -26,6 +26,10 @@ interface PDTarget {
   actuatorIdx: number;
   /** Inverse of the actuator's gear so we can divide once per tick. */
   invGear: number;
+  /** Actuator-declared ctrl range pulled from the MJCF (or symmetric [-1, 1]
+   *  default). Output is clamped to this rather than a global [-1, 1]. */
+  ctrlMin: number;
+  ctrlMax: number;
   target: number;
   /** Proportional gain in N·m / rad (already in physical units, gear-aware). */
   kp: number;
@@ -180,6 +184,7 @@ export class HumanoidControl {
       );
     }
     const gear = this.sim.gear[a] || 1;
+    const [ctrlMin, ctrlMax] = this.sim.ctrlRangeOf(a);
     this.targets.set(jointName, {
       jointName,
       actuatorName,
@@ -187,6 +192,8 @@ export class HumanoidControl {
       dofAdr: j.dofAdr,
       actuatorIdx: a,
       invGear: 1 / gear,
+      ctrlMin,
+      ctrlMax,
       target,
       kp,
       kd,
@@ -204,7 +211,7 @@ export class HumanoidControl {
       const v = qvel[t.dofAdr];
       // PD output in physical torque units; convert to normalized ctrl via
       // 1/gear so heavier-geared joints don't blow past their ctrl limits.
-      const u = clamp((t.kp * (t.target - q) - t.kd * v) * t.invGear, -1, 1);
+      const u = clamp((t.kp * (t.target - q) - t.kd * v) * t.invGear, t.ctrlMin, t.ctrlMax);
       this.sim.setCtrl(t.actuatorIdx, u);
     }
   }

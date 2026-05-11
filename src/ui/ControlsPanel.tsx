@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react';
+import { useId, useState } from 'react';
 import type { MujocoSim, ActuatorInfo } from '../sim/MujocoSim';
 import type { HumanoidControl, Side } from '../control/HumanoidControl';
 import type { ToastKind } from './Toast';
@@ -28,25 +28,30 @@ export function ControlsPanel({
   const [values, setValues] = useState<number[]>(() => Array.from({ length: actuators.length }, () => 0));
   const idPrefix = useId();
 
-  useEffect(() => {
-    for (let i = 0; i < values.length; i++) sim.setCtrl(i, values[i]);
-  }, [sim, values]);
-
+  // Sliders are write-only inputs. Each change writes `data.ctrl[i]` directly
+  // and releases the matching PD target on `control` so the PD loop doesn't
+  // overwrite the manual value on the next tick.
   const handleChange = (i: number, v: number) => {
     setValues(prev => {
       const next = prev.slice();
       next[i] = v;
       return next;
     });
+    sim.setCtrl(i, v);
+    control?.release(actuators[i].name);
   };
 
   const handleReset = () => {
     sim.reset();
+    control?.goLimp();
     setValues(values.map(() => 0));
   };
 
   const handleZeroCtrl = () => {
-    setValues(values.map(() => 0));
+    const zeros = values.map(() => 0);
+    setValues(zeros);
+    for (let i = 0; i < zeros.length; i++) sim.setCtrl(i, 0);
+    control?.clearTargets();
   };
 
   const runCommand = (fn: () => void) => {

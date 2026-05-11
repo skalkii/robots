@@ -81,6 +81,9 @@ export class MujocoSim {
   private jointAddr = new Map<string, JointAddr>();
   private actuatorIdx = new Map<string, number>();
   private actuatorGear = new Float64Array(0);
+  /** Flattened `[lo, hi]` per actuator (length = nu*2). Defaults to [-1, 1]
+   *  for actuators without an explicit `ctrlrange` in the MJCF. */
+  private actuatorRange = new Float64Array(0);
   private stepHooks: StepHook[] = [];
   private disposed = false;
 
@@ -140,15 +143,27 @@ export class MujocoSim {
       acc.delete();
     }
     const gear = new Float64Array(this.nu);
+    const range = new Float64Array(this.nu * 2);
     for (let i = 0; i < this.nu; i++) {
       const acc = m.actuator(i);
       if (acc.name) this.actuatorIdx.set(acc.name, i);
       // `actuator_gear` is laid out as 6 floats per actuator; for the motor
       // actuators in humanoid.xml only the first slot is meaningful.
       gear[i] = m.actuator_gear[i * 6] || 1;
+      const limited = m.actuator_ctrllimited[i] !== 0;
+      const lo = m.actuator_ctrlrange[i * 2];
+      const hi = m.actuator_ctrlrange[i * 2 + 1];
+      if (limited && hi > lo) {
+        range[i * 2] = lo;
+        range[i * 2 + 1] = hi;
+      } else {
+        range[i * 2] = -1;
+        range[i * 2 + 1] = 1;
+      }
       acc.delete();
     }
     this.actuatorGear = gear;
+    this.actuatorRange = range;
   }
 
   private cacheGeomDescriptors() {
@@ -198,6 +213,10 @@ export class MujocoSim {
   get ctrl(): Float64Array { return this.requireLive().data.ctrl; }
   get dt(): number { return this.model?.opt.timestep ?? 0.005; }
   get gear(): Float64Array { return this.actuatorGear; }
+  /** Returns `[lo, hi]` for actuator `i`. */
+  ctrlRangeOf(i: number): [number, number] {
+    return [this.actuatorRange[i * 2], this.actuatorRange[i * 2 + 1]];
+  }
 
   setCtrl(i: number, v: number) {
     if (this.disposed || !this.data) return;
