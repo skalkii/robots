@@ -2,16 +2,22 @@ import type { HumanoidControl } from '../control/HumanoidControl';
 import type { AgentClient, AgentTurn } from './AgentClient';
 import { runToolCalls } from './AgentClient';
 import type { ToolCall } from './tools';
+import type { CapturedFrame } from './WebcamCapture';
 
 export class MockAgent implements AgentClient {
   readonly label = 'Mock (offline)';
 
-  async respond(userText: string, control: HumanoidControl): Promise<AgentTurn> {
+  async respond(
+    userText: string,
+    control: HumanoidControl,
+    image?: CapturedFrame | null,
+  ): Promise<AgentTurn> {
     const calls = parse(userText);
+    const imageNote = image ? ` [saw ${image.width}×${image.height} frame]` : '';
     if (calls.length === 0) {
       return {
         text:
-          "(mock) I didn't recognize that. Try: 'raise your right arm', 'bend left elbow to 90', 'stand', or 'release'.",
+          `(mock)${imageNote} I didn't recognize that. Try: 'raise your right arm', 'bend left elbow to 90', 'stand', or 'release'.`,
         tools: [],
       };
     }
@@ -19,7 +25,7 @@ export class MockAgent implements AgentClient {
     const summary = tools
       .map(t => (t.result.ok ? `✓ ${t.result.message}` : `✗ ${t.result.message}`))
       .join('; ');
-    return { text: `(mock) ${summary}`, tools };
+    return { text: `(mock)${imageNote} ${summary}`, tools };
   }
 }
 

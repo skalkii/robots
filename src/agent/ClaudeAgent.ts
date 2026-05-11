@@ -2,6 +2,7 @@ import type { HumanoidControl } from '../control/HumanoidControl';
 import type { AgentClient, AgentTurn } from './AgentClient';
 import { runToolCalls } from './AgentClient';
 import { TOOL_SCHEMAS, type ToolCall } from './tools';
+import type { CapturedFrame } from './WebcamCapture';
 
 const ENDPOINT = 'https://api.anthropic.com/v1/messages';
 const DEFAULT_MODEL = 'claude-haiku-4-5-20251001';
@@ -16,9 +17,13 @@ const SYSTEM_PROMPT =
   'If the user asks something the robot cannot do, say so plainly.';
 
 type TextBlock = { type: 'text'; text: string };
+type ImageBlock = {
+  type: 'image';
+  source: { type: 'base64'; media_type: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'; data: string };
+};
 type ToolUseBlock = { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> };
 type ToolResultBlock = { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean };
-type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock;
+type ContentBlock = TextBlock | ImageBlock | ToolUseBlock | ToolResultBlock;
 
 interface ApiMessage {
   role: 'user' | 'assistant';
@@ -42,8 +47,22 @@ export class ClaudeAgent implements AgentClient {
     this.model = model;
   }
 
-  async respond(userText: string, control: HumanoidControl): Promise<AgentTurn> {
-    const messages: ApiMessage[] = [{ role: 'user', content: userText }];
+  async respond(
+    userText: string,
+    control: HumanoidControl,
+    image?: CapturedFrame | null,
+  ): Promise<AgentTurn> {
+    // First user turn — attach the optional webcam frame so the model can
+    // ground commands like "wave at me" or "raise the arm closest to me".
+    const firstContent: ContentBlock[] = [];
+    if (image) {
+      firstContent.push({
+        type: 'image',
+        source: { type: 'base64', media_type: image.mediaType, data: image.base64 },
+      });
+    }
+    firstContent.push({ type: 'text', text: userText });
+    const messages: ApiMessage[] = [{ role: 'user', content: firstContent }];
     const executedTools: AgentTurn['tools'] = [];
 
     for (let i = 0; i < 6; i++) {
