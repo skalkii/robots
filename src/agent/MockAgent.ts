@@ -21,7 +21,10 @@ export class MockAgent implements AgentClient {
     userText: string,
     control: HumanoidControl,
     image?: CapturedFrame | null,
+    // Mock has no streaming; we ignore the callback rather than fake it.
+    _onStream?: unknown,
   ): Promise<AgentTurn> {
+    void _onStream;
     const calls = parse(userText);
     const imageNote = image ? ` [saw ${image.width}×${image.height} frame]` : '';
     if (calls.length === 0) {

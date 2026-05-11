@@ -7,6 +7,9 @@ export interface UsageStats {
   outputTokens: number;
   cacheReadTokens?: number;
   cacheCreationTokens?: number;
+  /** Estimated USD cost for this turn (set by paid providers; mock leaves
+   *  undefined). */
+  costUsd?: number;
 }
 
 export interface AgentTurn {
@@ -19,12 +22,19 @@ export interface AgentTurn {
   truncated?: boolean;
 }
 
+export type StreamCallback = (event:
+  | { type: 'text'; text: string }
+  | { type: 'tool_start'; name: string }
+  | { type: 'tool_result'; name: string; ok: boolean; message: string }
+) => void;
+
 export interface AgentClient {
   readonly label: string;
   respond(
     userText: string,
     control: HumanoidControl,
     image?: CapturedFrame | null,
+    onStream?: StreamCallback,
   ): Promise<AgentTurn>;
   /** Drop any per-conversation state (history, etc.). Optional — pure
    *  agents may no-op. */
