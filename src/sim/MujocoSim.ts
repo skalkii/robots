@@ -33,8 +33,20 @@ export class MujocoSim {
   ngeom = 0;
   nbody = 0;
   njnt = 0;
+  nq = 0;
+  nv = 0;
 
   geoms: GeomDescriptor[] = [];
+
+  /** Snapshot of qpos taken immediately after the initial mj_forward, before
+   *  any user-initiated step. Useful for pinning the model to its default
+   *  pose (e.g. the kinematic stand-cheat). */
+  initialQpos!: Float64Array;
+
+  /** If the model's first joint is a free joint (mjJNT_FREE = 0), this points
+   *  at it. Null otherwise. The free joint takes 7 qpos entries and 6 qvel
+   *  entries starting at the given addresses. */
+  rootFreeJoint: { qposAdr: number; dofAdr: number } | null = null;
 
   private jointAddr = new Map<string, JointAddr>();
   private actuatorIdx = new Map<string, number>();
@@ -61,10 +73,26 @@ export class MujocoSim {
     this.ngeom = this.model.ngeom;
     this.nbody = this.model.nbody;
     this.njnt = this.model.njnt;
+    this.nq = (this.model as unknown as { nq: number }).nq;
+    this.nv = (this.model as unknown as { nv: number }).nv;
 
     this.cacheGeomDescriptors();
     this.cacheNameLookups();
+    this.detectRootFreeJoint();
     this.mujoco.mj_forward(this.model, this.data);
+    // Snapshot the just-computed default pose for kinematic pinning.
+    this.initialQpos = new Float64Array(this.qpos);
+  }
+
+  private detectRootFreeJoint() {
+    if (this.njnt === 0) return;
+    const jntType = this.model.jnt_type as Int32Array;
+    const qposAdr = this.model.jnt_qposadr as Int32Array;
+    const dofAdr = this.model.jnt_dofadr as Int32Array;
+    // mjJNT_FREE = 0, mjJNT_BALL = 1, mjJNT_SLIDE = 2, mjJNT_HINGE = 3.
+    if (jntType[0] === 0) {
+      this.rootFreeJoint = { qposAdr: qposAdr[0], dofAdr: dofAdr[0] };
+    }
   }
 
   private cacheNameLookups() {
