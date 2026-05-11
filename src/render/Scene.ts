@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GeomType, type GeomTypeValue, type GeomDescriptor } from '../sim/types';
 import type { MujocoSim } from '../sim/MujocoSim';
+import { RENDER, SIM } from '../config';
 
 export class Scene {
   readonly scene = new THREE.Scene();
@@ -16,26 +17,28 @@ export class Scene {
   private root = new THREE.Group();
   paused = false;
 
-  /** When non-null, the camera smoothly tracks whatever world-frame XYZ this
-   *  closure returns. The point is given in MuJoCo's Z-up frame; the renderer
-   *  converts it to Three's Y-up before applying. */
   private followGetter: (() => [number, number, number] | null) | null = null;
   followEnabled = true;
-  private followLerp = 0.12;
   private followTmp = new THREE.Vector3();
   private followDelta = new THREE.Vector3();
+
+  /** Wall-clock timestamp of the last RAF tick, used to drive a fixed-dt
+   *  accumulator so the sim runs at MuJoCo's `model.opt.timestep` regardless
+   *  of monitor refresh rate. */
+  private lastTime = 0;
+  private accum = 0;
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(window.devicePixelRatio);
     this.renderer.shadowMap.enabled = true;
 
-    this.scene.background = new THREE.Color(0x111418);
-    this.scene.fog = new THREE.Fog(0x111418, 8, 25);
+    this.scene.background = new THREE.Color(RENDER.fog.color);
+    this.scene.fog = new THREE.Fog(RENDER.fog.color, RENDER.fog.near, RENDER.fog.far);
 
-    this.camera = new THREE.PerspectiveCamera(50, 1, 0.05, 100);
-    this.camera.position.set(3, 2.2, 3);
-    this.camera.lookAt(0, 1, 0);
+    this.camera = new THREE.PerspectiveCamera(RENDER.camera.fov, 1, RENDER.camera.near, RENDER.camera.far);
+    this.camera.position.set(...RENDER.camera.position);
+    this.camera.lookAt(...RENDER.camera.lookAt);
 
     const hemi = new THREE.HemisphereLight(0xffffff, 0x222233, 0.55);
     this.scene.add(hemi);
@@ -48,7 +51,7 @@ export class Scene {
     this.scene.add(this.root);
 
     this.controls = new OrbitControls(this.camera, canvas);
-    this.controls.target.set(0, 1, 0);
+    this.controls.target.set(...RENDER.camera.lookAt);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
     this.controls.minDistance = 1;
@@ -62,7 +65,13 @@ export class Scene {
   attachSim(sim: MujocoSim) {
     this.sim = sim;
     this.meshes.forEach(m => this.root.remove(m));
-    this.meshes = sim.geoms.map(buildGeomMesh);
+    this.meshes = sim.geoms.map(g => {
+      const mesh = buildGeomMesh(g);
+      // Set the auto-update flag once at attach time; the per-frame sync just
+      // writes the matrix and trusts THREE to use it directly.
+      mesh.matrixAutoUpdate = false;
+      return mesh;
+    });
     this.meshes.forEach(m => this.root.add(m));
     this.root.matrixAutoUpdate = false;
     this.root.matrix.copy(this.zUpToYUp);
@@ -78,9 +87,28 @@ export class Scene {
   }
 
   start() {
-    const tick = () => {
+    this.lastTime = performance.now();
+    this.accum = 0;
+
+    const tick = (now: number) => {
+      const frame = Math.min((now - this.lastTime) / 1000, SIM.maxAccum);
+      this.lastTime = now;
+
       if (this.sim && !this.paused) {
-        for (let i = 0; i < 4; i++) this.sim.step();
+        const stepDt = this.sim.dt;
+        this.accum += frame;
+        let steps = 0;
+        while (this.accum >= stepDt && steps < SIM.maxStepsPerFrame) {
+          this.sim.step();
+          this.accum -= stepDt;
+          steps++;
+        }
+        // If we hit the per-frame step cap but still have leftover dt, drop
+        // it instead of integrating it next frame — keeps the sim from
+        // running away after a long stall.
+        if (steps >= SIM.maxStepsPerFrame && this.accum > stepDt) {
+          this.accum = 0;
+        }
       }
       if (this.sim) this.syncFromSim();
       this.updateFollow();
@@ -100,7 +128,7 @@ export class Scene {
     // which lives outside the rotated group — stays in world coordinates.
     this.followTmp.set(mj[0], mj[2], -mj[1]);
     this.followDelta.copy(this.followTmp).sub(this.controls.target);
-    this.followDelta.multiplyScalar(this.followLerp);
+    this.followDelta.multiplyScalar(RENDER.followLerp);
     this.controls.target.add(this.followDelta);
     this.camera.position.add(this.followDelta);
   }
@@ -109,6 +137,16 @@ export class Scene {
     cancelAnimationFrame(this.raf);
     this.controls.dispose();
     window.removeEventListener('resize', this.handleResize);
+    // Dispose GPU resources to keep dev StrictMode double-mounts from
+    // accumulating WebGL contexts.
+    for (const mesh of this.meshes) {
+      if (mesh instanceof THREE.Mesh) {
+        mesh.geometry.dispose();
+        (mesh.material as THREE.Material).dispose();
+      }
+    }
+    this.meshes = [];
+    this.renderer.dispose();
   }
 
   private syncFromSim() {
@@ -117,15 +155,14 @@ export class Scene {
     const xmat = this.sim.geomXmat;
     for (let i = 0; i < this.meshes.length; i++) {
       const m = this.meshes[i];
-      const px = xpos[i * 3], py = xpos[i * 3 + 1], pz = xpos[i * 3 + 2];
-      const r = xmat.subarray(i * 9, i * 9 + 9);
+      const p = i * 3;
+      const r = i * 9;
       this.rotMat.set(
-        r[0], r[1], r[2], px,
-        r[3], r[4], r[5], py,
-        r[6], r[7], r[8], pz,
+        xmat[r + 0], xmat[r + 1], xmat[r + 2], xpos[p + 0],
+        xmat[r + 3], xmat[r + 4], xmat[r + 5], xpos[p + 1],
+        xmat[r + 6], xmat[r + 7], xmat[r + 8], xpos[p + 2],
         0, 0, 0, 1,
       );
-      m.matrixAutoUpdate = false;
       m.matrix.copy(this.rotMat);
     }
   }
@@ -166,8 +203,6 @@ function buildGeometry(type: GeomTypeValue, size: [number, number, number]): THR
     case GeomType.SPHERE:
       return new THREE.SphereGeometry(size[0], 24, 16);
     case GeomType.CAPSULE: {
-      // Three capsule long axis = local Y. MuJoCo capsule long axis = local Z.
-      // Rotate geometry so its long axis aligns with mesh local Z.
       const g = new THREE.CapsuleGeometry(size[0], size[1] * 2, 8, 16);
       g.rotateX(Math.PI / 2);
       return g;
@@ -178,7 +213,6 @@ function buildGeometry(type: GeomTypeValue, size: [number, number, number]): THR
       return g;
     }
     case GeomType.CYLINDER: {
-      // Same Y→Z axis swap as capsule.
       const g = new THREE.CylinderGeometry(size[0], size[0], size[1] * 2, 24);
       g.rotateX(Math.PI / 2);
       return g;
