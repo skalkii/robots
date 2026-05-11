@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import type { HumanoidControl } from '../control/HumanoidControl';
 import type { AgentClient, AgentTurn } from '../agent/AgentClient';
 import { MockAgent } from '../agent/MockAgent';
 import { ClaudeAgent } from '../agent/ClaudeAgent';
+import { SpeechRecognizer } from '../agent/SpeechRecognizer';
 
 type Provider = 'mock' | 'claude';
 
@@ -28,8 +29,14 @@ export function ChatPanel({ control }: Props) {
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [turns, setTurns] = useState<ChatTurn[]>([]);
+  const [listening, setListening] = useState(false);
+  const [interim, setInterim] = useState('');
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const idRef = useRef(0);
+  const recognizerRef = useRef<SpeechRecognizer | null>(null);
+  const speechSupported =
+    recognizerRef.current?.supported ??
+    (typeof window !== 'undefined' && !!(window.SpeechRecognition ?? window.webkitSpeechRecognition));
 
   const agent: AgentClient = useMemo(() => {
     if (provider === 'claude' && apiKey) return new ClaudeAgent(apiKey);
@@ -40,17 +47,17 @@ export function ChatPanel({ control }: Props) {
     transcriptRef.current?.scrollTo({ top: 1e9, behavior: 'smooth' });
   }, [turns]);
 
-  const nextId = () => ++idRef.current;
+  const nextId = useCallback(() => ++idRef.current, []);
 
-  const onSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    const text = input.trim();
-    if (!text || busy) return;
+  const submit = useCallback(async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || busy) return;
     setInput('');
-    setTurns(prev => [...prev, { id: nextId(), role: 'user', text }]);
+    setInterim('');
+    setTurns(prev => [...prev, { id: nextId(), role: 'user', text: trimmed }]);
     setBusy(true);
     try {
-      const turn = await agent.respond(text, control);
+      const turn = await agent.respond(trimmed, control);
       setTurns(prev => [...prev, { id: nextId(), role: 'agent', text: turn.text, tools: turn.tools }]);
     } catch (err) {
       setTurns(prev => [
@@ -60,7 +67,49 @@ export function ChatPanel({ control }: Props) {
     } finally {
       setBusy(false);
     }
+  }, [agent, busy, control, nextId]);
+
+  const onSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    submit(input);
   };
+
+  const ensureRecognizer = useCallback(() => {
+    if (recognizerRef.current) return recognizerRef.current;
+    const r = new SpeechRecognizer({
+      onInterim: text => setInterim(text),
+      onFinal: text => {
+        setInterim('');
+        // Auto-submit the final transcript.
+        submit(text);
+      },
+      onError: msg => {
+        setInterim('');
+        setListening(false);
+        setTurns(prev => [...prev, { id: nextId(), role: 'error', text: `speech: ${msg}` }]);
+      },
+      onEnd: () => {
+        setListening(false);
+        setInterim('');
+      },
+    });
+    recognizerRef.current = r;
+    return r;
+  }, [nextId, submit]);
+
+  const toggleMic = () => {
+    const r = ensureRecognizer();
+    if (!r.supported) return;
+    if (r.isRunning) {
+      r.stop();
+      setListening(false);
+    } else {
+      r.start();
+      setListening(true);
+    }
+  };
+
+  useEffect(() => () => recognizerRef.current?.abort(), []);
 
   const saveSettings = () => {
     localStorage.setItem(STORE_PROVIDER, provider);
@@ -136,14 +185,30 @@ export function ChatPanel({ control }: Props) {
       </div>
 
       <form className="chat-input" onSubmit={onSubmit}>
+        <button
+          type="button"
+          className={`mic ${listening ? 'mic-on' : ''}`}
+          onClick={toggleMic}
+          disabled={!speechSupported || busy}
+          title={speechSupported ? (listening ? 'Stop listening' : 'Speak') : 'Speech recognition not supported in this browser'}
+          aria-label="Toggle microphone"
+        >
+          {listening ? '■' : '🎙'}
+        </button>
         <input
           type="text"
-          placeholder={busy ? 'Working…' : 'Tell the robot what to do'}
-          value={input}
+          placeholder={
+            listening
+              ? interim || 'Listening…'
+              : busy
+                ? 'Working…'
+                : 'Tell the robot what to do'
+          }
+          value={listening ? interim : input}
           onChange={e => setInput(e.target.value)}
-          disabled={busy}
+          disabled={busy || listening}
         />
-        <button type="submit" disabled={busy || !input.trim()}>Send</button>
+        <button type="submit" disabled={busy || listening || !input.trim()}>Send</button>
       </form>
     </section>
   );
