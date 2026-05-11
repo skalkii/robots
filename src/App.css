@@ -122,6 +122,14 @@
   grid-column: 1 / -1;
 }
 
+.rec-badge {
+  margin-left: 8px;
+  color: #bf616a;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .actuator-list {
   list-style: none;
   margin: 0;

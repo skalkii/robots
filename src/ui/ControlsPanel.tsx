@@ -1,11 +1,14 @@
-import { useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import type { MujocoSim, ActuatorInfo } from '../sim/MujocoSim';
 import type { HumanoidControl, Side } from '../control/HumanoidControl';
+import type { Recorder, RecorderState, SerializedTrajectory } from '../control/Recorder';
+import { deserializeTrajectory, serializeTrajectory } from '../control/Recorder';
 import type { ToastKind } from './Toast';
 
 interface Props {
   sim: MujocoSim;
   control: HumanoidControl | null;
+  recorder: Recorder | null;
   paused: boolean;
   onTogglePaused: () => void;
   followEnabled: boolean;
@@ -18,6 +21,7 @@ interface Props {
 export function ControlsPanel({
   sim,
   control,
+  recorder,
   paused,
   onTogglePaused,
   followEnabled,
@@ -26,7 +30,22 @@ export function ControlsPanel({
 }: Props) {
   const [actuators] = useState<ActuatorInfo[]>(() => sim.actuators());
   const [values, setValues] = useState<number[]>(() => Array.from({ length: actuators.length }, () => 0));
+  const [recorderState, setRecorderState] = useState<RecorderState>('idle');
+  const [hasTrajectory, setHasTrajectory] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const idPrefix = useId();
+
+  // Subscribe to recorder state so the buttons reflect record/play/idle.
+  useEffect(() => {
+    if (!recorder) return;
+    const tick = () => {
+      setRecorderState(recorder.getState());
+      setHasTrajectory(recorder.getTrajectory() !== null);
+    };
+    tick();
+    const id = window.setInterval(tick, 200);
+    return () => window.clearInterval(id);
+  }, [recorder]);
 
   // Sliders are write-only inputs. Each change writes `data.ctrl[i]` directly
   // and releases the matching PD target on `control` so the PD loop doesn't
@@ -72,6 +91,35 @@ export function ControlsPanel({
   const armDown = commandSide(s => control?.lowerArm(s));
   const elbow90 = commandSide(s => control?.bendElbow(s, 90));
 
+  const startRecord = () => runCommand(() => recorder?.startRecording());
+  const stopRecord = () => runCommand(() => recorder?.stop());
+  const playRecord = () => runCommand(() => {
+    const t = recorder?.getTrajectory();
+    if (!t) { onToast?.('warn', 'No trajectory recorded yet'); return; }
+    recorder?.play(t);
+  });
+
+  const saveRecord = () => runCommand(() => {
+    const t = recorder?.getTrajectory();
+    if (!t) { onToast?.('warn', 'No trajectory recorded yet'); return; }
+    const json = JSON.stringify(serializeTrajectory(t));
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${t.id}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+
+  const loadRecord = (file: File) => runCommand(async () => {
+    const text = await file.text();
+    const parsed = JSON.parse(text) as SerializedTrajectory;
+    const traj = deserializeTrajectory(parsed);
+    if (!recorder) return;
+    recorder.play(traj);
+  });
+
   return (
     <aside className="controls" aria-label="Robot controls">
       <header className="controls-header">
@@ -112,6 +160,39 @@ export function ControlsPanel({
               <button className="span2" onClick={() => runCommand(() => control.goLimp())}>
                 Release all targets
               </button>
+            </div>
+          </div>
+        )}
+        {recorder && (
+          <div className="commands">
+            <div className="commands-label">
+              Record / replay {recorderState !== 'idle' && <span className="rec-badge">● {recorderState}</span>}
+            </div>
+            <div className="commands-grid">
+              {recorderState === 'recording' ? (
+                <button className="span2" onClick={stopRecord}>Stop recording</button>
+              ) : (
+                <button className="span2" onClick={startRecord}>Record</button>
+              )}
+              <button onClick={playRecord} disabled={!hasTrajectory || recorderState !== 'idle'}>
+                Replay
+              </button>
+              <button onClick={stopRecord} disabled={recorderState !== 'playing'}>
+                Stop playback
+              </button>
+              <button onClick={saveRecord} disabled={!hasTrajectory}>Save…</button>
+              <button onClick={() => fileInputRef.current?.click()}>Load…</button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="application/json"
+                style={{ display: 'none' }}
+                onChange={e => {
+                  const f = e.target.files?.[0];
+                  if (f) loadRecord(f);
+                  e.target.value = '';
+                }}
+              />
             </div>
           </div>
         )}

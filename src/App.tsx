@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { MujocoSim } from './sim/MujocoSim';
 import { Scene } from './render/Scene';
 import { HumanoidControl } from './control/HumanoidControl';
+import { Recorder } from './control/Recorder';
 import { ControlsPanel } from './ui/ControlsPanel';
 import { ChatPanel } from './ui/ChatPanel';
 import { ToastStack } from './ui/Toast';
@@ -20,6 +21,7 @@ export default function App() {
   const [sim, setSim] = useState<MujocoSim | null>(null);
   const [scene, setScene] = useState<Scene | null>(null);
   const [control, setControl] = useState<HumanoidControl | null>(null);
+  const [recorder, setRecorder] = useState<Recorder | null>(null);
   const [paused, setPaused] = useState(false);
   const [followEnabled, setFollowEnabled] = useState(true);
   const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
@@ -36,6 +38,7 @@ export default function App() {
     let localScene: Scene | null = null;
     let localSim: MujocoSim | null = null;
     let localControl: HumanoidControl | null = null;
+    let localRecorder: Recorder | null = null;
     let cancelled = false;
 
     (async () => {
@@ -56,10 +59,12 @@ export default function App() {
         localScene.start();
 
         localControl = new HumanoidControl(localSim);
+        localRecorder = new Recorder(localSim);
 
         setSim(localSim);
         setScene(localScene);
         setControl(localControl);
+        setRecorder(localRecorder);
         setBoot({ phase: 'ready', message: 'ready' });
       } catch (err) {
         const msg = (err as Error).message;
@@ -71,12 +76,14 @@ export default function App() {
 
     return () => {
       cancelled = true;
+      localRecorder?.dispose();
       localControl?.dispose();
       localScene?.stop();
       localSim?.dispose();
       setSim(null);
       setScene(null);
       setControl(null);
+      setRecorder(null);
       bootedRef.current = false;
     };
   }, [pushToast]);
@@ -138,6 +145,7 @@ export default function App() {
         <ControlsPanel
           sim={sim}
           control={control}
+          recorder={recorder}
           paused={paused}
           onTogglePaused={togglePaused}
           followEnabled={followEnabled}
