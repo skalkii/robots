@@ -96,6 +96,32 @@
   background: #3a414f;
 }
 
+.commands {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.commands-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #88c0d0;
+  opacity: 0.85;
+}
+
+.commands-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+}
+
+.commands-grid button.span2 {
+  grid-column: 1 / -1;
+}
+
 .actuator-list {
   list-style: none;
   margin: 0;

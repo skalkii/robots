@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { MujocoSim } from './sim/MujocoSim';
 import { Scene } from './render/Scene';
+import { HumanoidControl } from './control/HumanoidControl';
 import { ControlsPanel } from './ui/ControlsPanel';
 import './App.css';
 
@@ -9,6 +10,7 @@ export default function App() {
   const [status, setStatus] = useState('booting…');
   const [sim, setSim] = useState<MujocoSim | null>(null);
   const [scene, setScene] = useState<Scene | null>(null);
+  const [control, setControl] = useState<HumanoidControl | null>(null);
   const [paused, setPaused] = useState(false);
 
   useEffect(() => {
@@ -17,6 +19,7 @@ export default function App() {
 
     let localScene: Scene | null = null;
     let localSim: MujocoSim | null = null;
+    let localControl: HumanoidControl | null = null;
     let cancelled = false;
 
     (async () => {
@@ -34,8 +37,11 @@ export default function App() {
         localScene.attachSim(localSim);
         localScene.start();
 
+        localControl = new HumanoidControl(localSim);
+
         setSim(localSim);
         setScene(localScene);
+        setControl(localControl);
       } catch (err) {
         console.error(err);
         setStatus(`error: ${(err as Error).message}`);
@@ -44,10 +50,12 @@ export default function App() {
 
     return () => {
       cancelled = true;
+      localControl?.dispose();
       localScene?.stop();
       localSim?.dispose();
       setSim(null);
       setScene(null);
+      setControl(null);
     };
   }, []);
 
@@ -69,7 +77,14 @@ export default function App() {
           </div>
         )}
       </div>
-      {sim && <ControlsPanel sim={sim} paused={paused} onTogglePaused={togglePaused} />}
+      {sim && (
+        <ControlsPanel
+          sim={sim}
+          control={control}
+          paused={paused}
+          onTogglePaused={togglePaused}
+        />
+      )}
     </div>
   );
 }
