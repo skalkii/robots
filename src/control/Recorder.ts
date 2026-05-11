@@ -1,4 +1,5 @@
 import type { MujocoSim } from '../sim/MujocoSim';
+import type { HumanoidControl } from './HumanoidControl';
 
 export interface Trajectory {
   id: string;
@@ -27,6 +28,18 @@ interface Listeners {
   onTrajectoryReady?: (t: Trajectory) => void;
 }
 
+export interface RecorderOptions extends Listeners {
+  /** Hard frame cap. Overridden by `captureDurationSec` when both are set. */
+  maxFrames?: number;
+  /** Convenience: cap the buffer to this many seconds of sim time. Computed
+   *  against `sim.dt` at construction. */
+  captureDurationSec?: number;
+  /** Optional `HumanoidControl` handle. When provided, starting a playback
+   *  also clears the controller's PD targets and locomotion so the
+   *  kinematic qpos writes aren't fighting an active PD loop. */
+  control?: HumanoidControl;
+}
+
 /**
  * Captures and replays `data.qpos` trajectories from a `MujocoSim`. One
  * mode at a time (recording or playing). The buffer caps at `maxFrames`
@@ -34,6 +47,7 @@ interface Listeners {
  */
 export class Recorder {
   private sim: MujocoSim;
+  private control: HumanoidControl | undefined;
   private listeners: Listeners;
   private maxFrames: number;
   private state: RecorderState = 'idle';
@@ -42,10 +56,20 @@ export class Recorder {
   private activeTrajectory: Trajectory | null = null;
   private unregister: (() => void) | null = null;
 
-  constructor(sim: MujocoSim, opts: { maxFrames?: number } & Listeners = {}) {
+  constructor(sim: MujocoSim, opts: RecorderOptions = {}) {
     this.sim = sim;
-    this.maxFrames = opts.maxFrames ?? 6000; // 30 s at 5 ms timestep
+    this.control = opts.control;
+    this.maxFrames = opts.captureDurationSec != null
+      ? Math.max(1, Math.ceil(opts.captureDurationSec / Math.max(sim.dt, 1e-6)))
+      : opts.maxFrames ?? 6000; // 30 s at 5 ms timestep
     this.listeners = { onStateChange: opts.onStateChange, onTrajectoryReady: opts.onTrajectoryReady };
+  }
+
+  /** Adjust the capture window at runtime. Drops existing buffered frames
+   *  beyond the new cap. */
+  setCaptureDuration(seconds: number) {
+    this.maxFrames = Math.max(1, Math.ceil(seconds / Math.max(this.sim.dt, 1e-6)));
+    while (this.buffer.length > this.maxFrames) this.buffer.shift();
   }
 
   getState(): RecorderState { return this.state; }
@@ -84,6 +108,10 @@ export class Recorder {
     if (t.nq !== this.sim.nq) {
       throw new Error(`Trajectory nq=${t.nq} does not match sim nq=${this.sim.nq}`);
     }
+    // Quiet the PD loop and any in-progress locomotion so the kinematic
+    // playback writes aren't being fought every step.
+    this.control?.clearTargets();
+    this.control?.cancelMotion();
     this.activeTrajectory = t;
     this.playHead = 0;
     this.state = 'playing';

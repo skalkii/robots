@@ -59,7 +59,12 @@ export default function App() {
         localScene.start();
 
         localControl = new HumanoidControl(localSim);
-        localRecorder = new Recorder(localSim);
+        // Default ground-height provider: raycast straight down from above.
+        // Returns null off the floor plane, in which case the control layer
+        // falls back to the initial standing height.
+        const groundSim = localSim;
+        localControl.setGroundHeightProvider((x, y) => groundSim.rayDown(x, y));
+        localRecorder = new Recorder(localSim, { control: localControl });
 
         setSim(localSim);
         setScene(localScene);
