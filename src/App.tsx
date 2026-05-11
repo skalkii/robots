@@ -1,19 +1,22 @@
 import { useEffect, useRef, useState } from 'react';
 import { MujocoSim } from './sim/MujocoSim';
 import { Scene } from './render/Scene';
+import { ControlsPanel } from './ui/ControlsPanel';
 import './App.css';
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [status, setStatus] = useState('booting…');
-  const [info, setInfo] = useState<{ ngeom: number; nbody: number; nu: number } | null>(null);
+  const [sim, setSim] = useState<MujocoSim | null>(null);
+  const [scene, setScene] = useState<Scene | null>(null);
+  const [paused, setPaused] = useState(false);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    let scene: Scene | null = null;
-    let sim: MujocoSim | null = null;
+    let localScene: Scene | null = null;
+    let localSim: MujocoSim | null = null;
     let cancelled = false;
 
     (async () => {
@@ -23,14 +26,16 @@ export default function App() {
         if (cancelled) return;
 
         setStatus('loading MuJoCo WASM…');
-        sim = await MujocoSim.load(xml);
-        if (cancelled) { sim.dispose(); return; }
+        localSim = await MujocoSim.load(xml);
+        if (cancelled) { localSim.dispose(); return; }
 
         setStatus('rendering');
-        scene = new Scene(canvas);
-        scene.attachSim(sim);
-        scene.start();
-        setInfo({ ngeom: sim.ngeom, nbody: sim.nbody, nu: sim.nu });
+        localScene = new Scene(canvas);
+        localScene.attachSim(localSim);
+        localScene.start();
+
+        setSim(localSim);
+        setScene(localScene);
       } catch (err) {
         console.error(err);
         setStatus(`error: ${(err as Error).message}`);
@@ -39,22 +44,32 @@ export default function App() {
 
     return () => {
       cancelled = true;
-      scene?.stop();
-      sim?.dispose();
+      localScene?.stop();
+      localSim?.dispose();
+      setSim(null);
+      setScene(null);
     };
   }, []);
+
+  const togglePaused = () => {
+    if (!scene) return;
+    scene.paused = !scene.paused;
+    setPaused(scene.paused);
+  };
 
   return (
     <div className="app">
       <canvas ref={canvasRef} className="viewport" />
       <div className="hud">
         <div className="status">{status}</div>
-        {info && (
+        {sim && (
           <div className="info">
-            geoms: {info.ngeom} · bodies: {info.nbody} · actuators: {info.nu}
+            geoms: {sim.ngeom} · bodies: {sim.nbody} · actuators: {sim.nu}
+            {paused && <span className="paused"> · PAUSED</span>}
           </div>
         )}
       </div>
+      {sim && <ControlsPanel sim={sim} paused={paused} onTogglePaused={togglePaused} />}
     </div>
   );
 }
