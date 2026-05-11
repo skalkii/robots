@@ -50,6 +50,17 @@ export interface StandOptions {
    *  on top so heavier joints still get their share of effort. */
   kp?: number;
   kd?: number;
+  /** When true (the default if `pinRoot` is not set), watch the root joint's
+   *  velocity and automatically engage the kinematic pin once the body has
+   *  visibly settled — gives the user realistic physics until convergence,
+   *  then locks in for stability. Pass `false` to keep the PD-only path. */
+  autoSettle?: boolean;
+}
+
+interface SettleState {
+  count: number;
+  velThreshold: number;
+  requiredFrames: number;
 }
 
 export class HumanoidControl {
@@ -59,6 +70,7 @@ export class HumanoidControl {
   private pinRoot = false;
   private locomotion: LocomotionState | null = null;
   private groundHeightProvider: GroundHeightProvider | null = null;
+  private settle: SettleState | null = null;
 
   constructor(sim: MujocoSim) {
     this.sim = sim;
@@ -103,6 +115,10 @@ export class HumanoidControl {
       this.setTarget(a.name, a.name, 0, kp, kd);
     }
     this.pinRoot = !!opts.pinRoot;
+    // Default: when not explicitly pinning, watch for stillness and pin once
+    // the robot has settled. The user can opt out with `autoSettle: false`.
+    const autoSettle = opts.autoSettle ?? !this.pinRoot;
+    this.settle = autoSettle ? { count: 0, velThreshold: 0.05, requiredFrames: 20 } : null;
   }
 
   // ──────────────────────────────────────────────────────────────────────
@@ -163,6 +179,7 @@ export class HumanoidControl {
     this.clearTargets();
     this.pinRoot = false;
     this.locomotion = null;
+    this.settle = null;
   }
 
   // ──────────────────────────────────────────────────────────────────────
@@ -225,10 +242,34 @@ export class HumanoidControl {
     for (const t of this.targets.values()) {
       const q = qpos[t.qposAdr];
       const v = qvel[t.dofAdr];
-      // PD output in physical torque units; convert to normalized ctrl via
-      // 1/gear so heavier-geared joints don't blow past their ctrl limits.
       const u = clamp((t.kp * (t.target - q) - t.kd * v) * t.invGear, t.ctrlMin, t.ctrlMax);
       this.sim.setCtrl(t.actuatorIdx, u);
+    }
+    if (this.settle && !this.pinRoot) this.checkSettle();
+  }
+
+  /** Counts consecutive steps where every root-velocity component is below
+   *  the threshold; engages the kinematic root pin once the threshold has
+   *  been held long enough. The 20-frame default at the 5 ms sim step
+   *  corresponds to ~100 ms of stillness. */
+  private checkSettle() {
+    const root = this.sim.rootFreeJoint;
+    const s = this.settle;
+    if (!root || !s) return;
+    const qvel = this.sim.qvel;
+    let max = 0;
+    for (let i = 0; i < 6; i++) {
+      const v = Math.abs(qvel[root.dofAdr + i]);
+      if (v > max) max = v;
+    }
+    if (max < s.velThreshold) {
+      s.count++;
+      if (s.count >= s.requiredFrames) {
+        this.pinRoot = true;
+        this.settle = null;
+      }
+    } else {
+      s.count = 0;
     }
   }
 
