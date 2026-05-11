@@ -208,6 +208,11 @@
   margin-left: auto;
 }
 
+.chat-header .agent-cost {
+  color: #a3be8c;
+  font-variant-numeric: tabular-nums;
+}
+
 .chat-settings, .chat-camera {
   background: transparent;
   color: #d8dee9;

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AgentTurn } from '../agent/AgentClient';
+import { formatUsd } from '../agent/pricing';
 
 export interface ChatTurn {
   id: number;
@@ -58,6 +59,7 @@ export function ChatTranscript({ turns, busy }: Props) {
             <div className="turn-usage">
               tokens: {t.usage.inputTokens} in · {t.usage.outputTokens} out
               {t.usage.cacheReadTokens != null && ` · ${t.usage.cacheReadTokens} cache`}
+              {t.usage.costUsd != null && ` · ${formatUsd(t.usage.costUsd)}`}
               {t.truncated && ' · ⚠ truncated'}
             </div>
           )}
